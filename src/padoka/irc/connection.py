@@ -70,6 +70,29 @@ class Connection:
         return self._tls if self._tls is not None else self._sock
 
     # -- lifecycle ---------------------------------------------------------
+    @classmethod
+    def _make_ssl_context(cls, ssl_params: dict) -> ssl.SSLContext:
+        """Build the client TLS context.
+
+        Uses ssl.create_default_context() -- a bare
+        SSLContext(PROTOCOL_TLS_CLIENT) would have an EMPTY trust store and
+        fail "unable to get local issuer certificate" against any public CA,
+        no matter how fresh the OS ca-certificates package is.
+        """
+        ctx = ssl.create_default_context()
+        if ssl_params.get("verify") is False:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        else:
+            ctx.check_hostname = bool(ssl_params.get("check_hostname", True))
+        if ssl_params.get("ca_cert"):
+            ctx.load_verify_locations(ssl_params["ca_cert"])
+        if ssl_params.get("cert_file"):
+            ctx.load_cert_chain(
+                ssl_params["cert_file"],
+                ssl_params.get("key_file"))
+        return ctx
+
     def open(self) -> None:
         self.last_error = None
         try:
@@ -77,18 +100,7 @@ class Connection:
                 (self.host, self.port), timeout=self.CONNECT_TIMEOUT)
             self._sock = raw
             if self.ssl_params:
-                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-                if self.ssl_params.get("verify") is False:
-                    ctx.check_hostname = False
-                    ctx.verify_mode = ssl.CERT_NONE
-                else:
-                    ctx.check_hostname = bool(self.ssl_params.get("check_hostname", True))
-                if self.ssl_params.get("ca_cert"):
-                    ctx.load_verify_locations(self.ssl_params["ca_cert"])
-                if self.ssl_params.get("cert_file"):
-                    ctx.load_cert_chain(
-                        self.ssl_params["cert_file"],
-                        self.ssl_params.get("key_file"))
+                ctx = self._make_ssl_context(self.ssl_params)
                 self._tls = ctx.wrap_socket(raw, server_hostname=self.host)
         except (OSError, ssl.SSLError) as e:
             # socket.gaierror (DNS), ECONNREFUSED, TLS handshake/CA errors,

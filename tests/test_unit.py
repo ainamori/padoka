@@ -434,5 +434,36 @@ check("last_error records DNS failure reason",
       _conn2.last_error is not None and _conn2.last_error != "")
 
 # ---------------------------------------------------------------------------
+section("Connection TLS context (system CA store must be loaded)")
+import ssl as _ssl  # noqa: E402
+
+# Regression: a bare SSLContext(PROTOCOL_TLS_CLIENT) has an EMPTY trust
+# store, so upstream TLS against any public CA failed with
+# "unable to get local issuer certificate" even on a fresh OS store.
+_bare = _ssl.SSLContext(_ssl.PROTOCOL_TLS_CLIENT)
+_ctx = Connection._make_ssl_context({"verify": True})
+check("verify context is CERT_REQUIRED",
+      _ctx.verify_mode == _ssl.CERT_REQUIRED)
+check("verify context check_hostname on", _ctx.check_hostname is True)
+# cert_store_stats keys vary by CPython version (x509_ca / num_cas)
+def _n_cas(ctx):
+    st = ctx.cert_store_stats()
+    return st.get("x509_ca", st.get("num_cas", 0))
+check("verify context loads system CA store (n_cas > 0)",
+      _n_cas(_ctx) > 0)
+check("bare TLS_CLIENT context has empty store (documents the bug)",
+      _n_cas(_bare) == 0)
+
+_ctx_nv = Connection._make_ssl_context({"verify": False})
+check("verify:false -> CERT_NONE + no hostname check",
+      _ctx_nv.verify_mode == _ssl.CERT_NONE
+      and _ctx_nv.check_hostname is False)
+
+_ctx_ch = Connection._make_ssl_context({"verify": True, "check_hostname": False})
+check("check_hostname:false honored with verify",
+      _ctx_ch.check_hostname is False
+      and _ctx_ch.verify_mode == _ssl.CERT_REQUIRED)
+
+# ---------------------------------------------------------------------------
 print("\n%d passed, %d failed" % (_passed, _failed))
 sys.exit(1 if _failed else 0)
