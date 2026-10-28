@@ -92,37 +92,89 @@ if [ -z "$pem" ]; then
     exit 1
 fi
 
-echo "== 提示証明書: ${host}:${port} (取得方法: $method) =="
-# チェーン全体（leaf + 中間 CA）を出力する
-n=$(printf '%s\n' "$pem" | grep -c 'BEGIN CERTIFICATE')
-echo "証明書ブロック数: $n"
-if command -v openssl >/dev/null 2>&1; then
-    printf '%s\n' "$pem" | openssl x509 -noout -subject -issuer -dates
-    printf '%s\n' "$pem" | openssl x509 -noout -fingerprint -sha256
-else
-    python3 - "$pem" <<'PYEOF'
-import base64, hashlib, re, sys
-pem = sys.argv[1]
-blocks = re.findall(r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----",
-                    pem, re.S)
-for i, b in enumerate(blocks):
-    der = base64.decodebytes(b.encode())
-    print("cert[%d] sha256 fingerprint=%s"
-          % (i, ":".join("%02X" % x for x in hashlib.sha256(der).digest())))
-print("注: openssl 未インストールのため subject/issuer は非表示。指紋で確認してください。")
-PYEOF
-fi
-[ "$method" = "python3 (leaf のみ)" ] && \
-    echo "注: openssl 未インストールのため leaf のみ取得。チェーン複数（私有 CA）の場合は openssl 版で取得を。"
-echo
-echo ">> subject == issuer なら自己署名です。指紋を確認のうえ固定してください。"
-echo
-
 case "$out" in
     /*) : ;;
     *) out="$PWD/$out" ;;
 esac
 mkdir -p "$(dirname "$out")"
 printf '%s\n' "$pem" > "$out"
+echo "== 提示証明書: ${host}:${port} (取得方法: $method) =="
+echo "証明書ブロック数: $(printf '%s\n' "$pem" | grep -c 'BEGIN CERTIFICATE')"
 echo "書き出しました: $out"
-echo "次の検証で接続成功するはず:  padoka -c config/padoka.yml --debug"
+echo
+
+# --- 4) subject/issuer 表示 + 指紋 + 検証テスト ---------------------------
+# 検証テストは padoka と同じ条件（システムストア + ca_cert、ホスト名検証
+# 有効、SNI 送信）で接続を試みる。leaf のみ取得で私有 CA 発行の証明書を
+# ピンした場合は「検証テスト: 失敗」で止まるので、そのまま padoka に
+# 渡す前にここで分かる。
+if command -v python3 >/dev/null 2>&1; then
+    python3 - "$host" "$port" "$out" <<'PYEOF'
+import base64, hashlib, os, re, socket, ssl, sys, tempfile
+host, port, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+pem = open(out).read()
+blocks = re.findall(r"-----BEGIN CERTIFICATE-----\s*(.*?)\s*-----END CERTIFICATE-----",
+                    pem, re.S)
+for i, b in enumerate(blocks):
+    der = base64.decodebytes(b.encode())
+    print("cert[%d] sha256=%s" % (i, ":".join("%02X" % x
+          for x in hashlib.sha256(der).digest())))
+# subject / issuer（CPython 内部 API。使えない環境では指紋のみ）
+selfsigned = None
+try:
+    td = tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False)
+    td.write(pem); td.close()
+    try:
+        info = ssl._ssl._test_decode_cert(td.name)
+    finally:
+        os.unlink(td.name)
+    def fmt(t):
+        return ", ".join("%s=%s" % (k, v) for pair in t for k, v in pair)
+    subj, iss = fmt(info["subject"]), fmt(info["issuer"])
+    print("subject: " + subj)
+    print("issuer:  " + iss)
+    print("notAfter: " + str(info.get("notAfter")))
+    selfsigned = (subj == iss)
+    print(">> " + ("自己署名（leaf 単体で固定可）" if selfsigned
+                    else "** 私有 CA 発行 **（leaf 単体では固定不可: CA も必要）"))
+except Exception as e:
+    print("(subject/issuer 非表示: %r)" % e)
+# padoka と同条件で検証テスト
+ctx = ssl.create_default_context(cafile=out)
+try:
+    s = ctx.wrap_socket(socket.create_connection((host, port), timeout=30),
+                        server_hostname=host)
+    s.close()
+    print("検証テスト: 成功 -> この PEM だけで padoka は接続できます")
+except ssl.SSLCertVerificationError as e:
+    r = str(e.verify_message)
+    if "local issuer" in r:
+        print("検証テスト: 失敗 (unable to get local issuer certificate)")
+        if selfsigned is True:
+            print("  -> 自己署名なのに検証失敗。PEM の破損・ホスト不一致を確認。")
+        else:
+            print("  -> CA 証明書が必要です（leaf 単体では検証できない）:")
+            print("     a) openssl CLI をインストールして本スクリプトを再実行"
+                  "（-showcerts でチェーン全体を取得）")
+            print("     b) openssl がある別マシンで取得し、この PEM を差し替え")
+            print("     c) 暫定策として verify: false（MITM 耐性を捨てるため非推奨）")
+    elif "hostname" in r.lower() or "match" in r.lower():
+        print("検証テスト: 失敗 (ホスト名不一致)。ssl_params.check_hostname: false を検討。")
+    else:
+        print("検証テスト: 失敗 (%s)" % r)
+except OSError as e:
+    print("検証テスト: 接続不可 (%s)" % e)
+PYEOF
+else
+    printf '%s\n' "$pem" | openssl x509 -noout -subject -issuer -dates
+    printf '%s\n' "$pem" | openssl x509 -noout -fingerprint -sha256
+fi
+echo
+[ "$(printf '%s\n' "$pem" | grep -c 'BEGIN CERTIFICATE')" -gt 1 ] && \
+    echo "注: チェーン複数取得。padoka の ca_cert は leaf+CA 全体で良い。"
+
+if command -v python3 >/dev/null 2>&1; then
+    echo "接続を確認:  padoka -c config/padoka.yml --debug"
+else
+    echo "警告: python3 が見つからないため検証テスト未実行。手動で接続を確認してください。"
+fi

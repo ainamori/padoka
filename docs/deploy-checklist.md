@@ -158,6 +158,7 @@ docker stop padoka             # 正常終了 (SIGTERM)
 | `Connection closed by server` の繰り返し | nick 衝突 or ACL 拒否。nick 変更 / サーバー ACL を確認 |
 | IRC 接続できない（TLS） | `ssl_params.verify` / 証明書ストア。必要なら CA 指定 |
 | `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` | 上流が自己署名/私有 CA（ircnet の想定挙動）。`scripts/fetch-upstream-cert.sh` で証明書を `config/certs/ircnet-ca.pem` に固定し、`ca_cert` で参照（`verify: false` は非推奨） |
+| 証明書固定しても同じ VERIFY_FAILED が出る | **私有 CA 発行で leaf のみ取得**された状態。スクリプトの「検証テスト」結果を確認: 失敗なら openssl CLI を入れて再実行（チェーン全体取得）か、openssl 環境の別マシンで取得し差し替え |
 | `failed during tls handshake`（上記以外） | SNI/ホスト名不一致 → 指紋確認後に `check_hostname: false` も検討。中間ポートで TLS を剥がれている可能性（プロキシ環境） |
 | クライアントが TLS で接続できない | 証明書指紋の未登録（自己署名）/ `-ssl_verify=off`。ホスト側のポート公開 (`PADOKA_CLIENT_PORT`) / `client_server.acl` も確認 |
 | SASL 認証で 907 が返る | `client_server.pass` とクライアント側の SASL パスワード不一致 |

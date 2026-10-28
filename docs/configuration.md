@@ -108,9 +108,22 @@ default のままでは `certificate verify failed: unable to get local issuer
 証明書を `ca_cert` でピンニングします:
 
 ```bash
-# サーバーが到達できるマシンで実行（指紋を確認して）
+# サーバーが到達できるマシンで実行
 scripts/fetch-upstream-cert.sh dh.ircnet.ne.jp 6697 config/certs/ircnet-ca.pem
 ```
+
+スクリプトは取得後に **padoka と同じ条件で検証テスト** を実行します:
+
+- `検証テスト: 成功` → その PEM だけで接続できます
+- `検証テスト: 失敗 (unable to get local issuer certificate)` →
+  **私有 CA 発行で leaf のみ取得**された状態（openssl CLI が無い環境の
+  python3 フォールバック等）です。CA 証明書が必要なので:
+  1. `dnf install -y openssl`（または `yum install openssl`）してスクリプトを
+     再実行（`-showcerts` でチェーン全体を取得）、または
+  2. openssl のある別マシンで取得した PEM を `config/certs/ircnet-ca.pem` に
+     差し替える
+
+自己署名（subject == issuer）なら leaf 単体で固定可能です。
 
 ```yaml
 servers:
