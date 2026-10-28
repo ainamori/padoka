@@ -98,6 +98,13 @@ servers:
       verify: true          # 証明書検証
       # ca_cert: /path      # 独自CA（自己署名上流のピンニングに使用）
       # check_hostname: false
+    # 上流 SASL（ircv3 PLAIN）。NICK 送信前に AUTHENTICATE を行い、
+    # 904 (success) を確認してから登録する。多くの IRC ネットワークで
+    # 登録 nick の使用に必須（SASL 必須サーバー）。
+    # password が空の sasl ブロックは警告を出して SASL をスキップします。
+    # sasl:
+    #   username: mynick      # NickServ アカウント（省略すると user を使用）
+    #   password: nickserv_password
 ```
 
 #### 上流 TLS 検証の失敗（`CERTIFICATE_VERIFY_FAILED`）

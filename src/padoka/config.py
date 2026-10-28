@@ -181,13 +181,18 @@ class Config:
             host = si["host"]
             passw = si.get("pass")
             sslp = si.get("ssl_params")
+            # per-server upstream SASL (ircv3 PLAIN), e.g.:
+            #   sasl:
+            #     username: mynick
+            #     password: nickserv_password
+            sasl = si.get("sasl")
+            entry = {"host": host, "pass": passw, "ssl_params": sslp,
+                     "sasl": sasl}
             if isinstance(port, list) or (isinstance(port, str) and ".." in port):
                 for p in _expand_ports(port):
-                    out.append({"host": host, "port": p, "pass": passw,
-                                "ssl_params": sslp})
+                    out.append({**entry, "port": p})
             else:
-                out.append({"host": host, "port": int(port), "pass": passw,
-                            "ssl_params": sslp})
+                out.append({**entry, "port": int(port)})
         return out
 
     # ------------------------------------------------------------- channels

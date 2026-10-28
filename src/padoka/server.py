@@ -16,6 +16,7 @@ events), ensuring serialized processing.
 
 from __future__ import annotations
 
+import base64
 import random
 import re
 import signal
@@ -25,7 +26,7 @@ import threading
 import queue
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from . import errors as E
 from .client import PDKClient
@@ -35,10 +36,18 @@ from .irc.connection import Connection, ConnectionClosed
 from .logger import PDKLogger
 from .state import PDKState
 
-__all__ = ["PDKServer", "PrefixObject"]
+__all__ = ["PDKServer", "PrefixObject", "sasl_plain_payload"]
 
 TIMER_INTERVAL_SEC = 60
 MAX_PONG_FAIL = 5
+
+
+def sasl_plain_payload(username: str, password: str) -> str:
+    """ircv3 SASL PLAIN credential data: base64(authzid NUL authcid NUL
+    passwd) with an empty authzid."""
+    return base64.b64encode(
+        b"\x00" + str(username).encode("utf-8")
+        + b"\x00" + str(password).encode("utf-8")).decode("ascii")
 
 # sentinel tag used to mark internal events in the shared input queue
 EVENT = object()
@@ -156,14 +165,17 @@ class PDKServer:
                 self._conn.close()
 
     # --------------------------------------------------------- server thread
-    def next_server_info(self) -> Tuple[str, int, Optional[str], Optional[dict]]:
+    def next_server_info(self):
+        """(host, port, pass, ssl_params, sasl) of the next server in rotation."""
         lst = self._config.server_list
         sv = lst.pop(random.randrange(len(lst)))
         lst.append(sv)
-        return sv["host"], sv["port"], sv["pass"], sv["ssl_params"]
+        return (sv["host"], sv["port"], sv["pass"], sv["ssl_params"],
+                sv.get("sasl"))
 
     def _make_server_conn(self) -> Connection:
-        host, port, self._server_pass, sslp = self.next_server_info()
+        host, port, self._server_pass, sslp, self._server_sasl = \
+            self.next_server_info()
         conn = Connection(host, port, sslp)
         conn.queue = self._in_q  # feed parsed messages to our dispatcher
         return conn
@@ -233,11 +245,8 @@ class PDKServer:
         while not self._exiting and time.time() < end:
             time.sleep(1)
 
-    def _server_main_proc(self, conn: Connection) -> None:
-        # -- login ----------------------------------------------------------
-        if self._server_pass:
-            conn.send(Command.pass_(self._server_pass))
-
+    def _register(self, conn: Connection) -> None:
+        """Send NICK + USER (away_nick handling included)."""
         if self._config.away_nick and self.client_count() == 0:
             self.state.original_nick = self._config.nick
             self.state.set_nick(self._config.away_nick)
@@ -247,10 +256,67 @@ class PDKServer:
         conn.send(Command.user(self._config.user, self._config.hostname,
                                self._config.servername, self._config.realname))
 
+    def _server_main_proc(self, conn: Connection) -> None:
+        # -- login ----------------------------------------------------------
+        if self._server_pass:
+            conn.send(Command.pass_(self._server_pass))
+
+        # -- upstream SASL (ircv3 PLAIN), must finish before NICK/USER ------
+        # servers:
+        #   - host: dev.ircnet.ne.jp
+        #     sasl:
+        #       username: mynick
+        #       password: nickserv_password
+        sasl = self._server_sasl
+        sasl_done = sasl is None
+        sasl_sent = False
+        sasl_user = None
+        if sasl and not sasl.get("password"):
+            # configured but unusable: say so instead of failing with 907
+            self._logger.slog(
+                "WARNING: SASL configured for %s but no password set; "
+                "skipping SASL (set servers[].sasl.password)." % conn.host)
+            sasl = None
+            sasl_done = True
+        if sasl:
+            sasl_user = str(sasl.get("username") or self._config.user)
+            password = str(sasl.get("password") or "")
+            self._sasl_payload = sasl_plain_payload(sasl_user, password)
+            conn.send(Command.authenticate("PLAIN"))
+            self._logger.slog("SASL PLAIN started (username=%s)." % sasl_user)
+
+        if not sasl:
+            self._register(conn)
+
         # wait for welcome
         while True:
             q = self._recv_from_server(conn)
             cmd = q.command
+            if not sasl_done:
+                p0 = q.params[0] if q.params else ""
+                if cmd == "AUTHENTICATE" and p0 == "+":
+                    # some servers use `AUTHENTICATE +` for continuation
+                    conn.send(Command.authenticate(self._sasl_payload))
+                    sasl_sent = True
+                    continue
+                if cmd == "905" and not sasl_sent:
+                    # 905: `SASL: +` continuation
+                    conn.send(Command.authenticate(self._sasl_payload))
+                    sasl_sent = True
+                    continue
+                if cmd == "904":
+                    sasl_done = True
+                    self._logger.slog("SASL success (username=%s)." % sasl_user)
+                    self._register(conn)
+                    continue
+                if cmd in ("906", "907", "908"):
+                    self._logger.slog("SASL failed: %s" % q)
+                    raise E.PDKReconnectToServer
+                if cmd == "ERROR":
+                    self._logger.slog("Server sent ERROR during login: %s" % q)
+                    raise E.PDKReconnectToServer
+                # 903 (mechanism list), 909, notices, ... -> keep waiting
+                continue
             if cmd == "001":
                 break
             if cmd in ("433", "437"):

@@ -101,6 +101,19 @@ servers:
   #   port: 6667
   #   pass: null
 
+  # ---- 海外からの接続（GCP 等） ----
+  # irc / dh の一般接続は日本国内限定。海外では dev サーバー + SASL:
+  #   ERROR :Closing Link: ... (Unauthorized connection) が出る場合は
+  #   本エントリの sasl.password に NickServ パスワードを記入。
+  # - host: dev.ircnet.ne.jp
+  #   port: 6697
+  #   pass: null
+  #   ssl_params:
+  #     verify: true
+  #   sasl:
+  #     username: padoka_ircnet
+  #     password: ""
+
 # --------------------------------------------------------------- ユーザー情報
 user: padoka
 nick: padoka_ircnet        # この instance（ircnet）専用の nick

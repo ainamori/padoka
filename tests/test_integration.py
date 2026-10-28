@@ -57,6 +57,7 @@ class FakeIRCServer(threading.Thread):
         self.conn = None
         self.got_privmsg = threading.Event()
         self.received = []
+        self.sasl_ok = False
 
     def run(self):
         self.conn, _ = self.sock.accept()
@@ -86,7 +87,23 @@ class FakeIRCServer(threading.Thread):
         m = IRCMessage.parse(text + "\r\n")
         cmd = m.command
         p = m.params
-        if cmd == "NICK":
+        if cmd == "AUTHENTICATE":
+            if not p or p[0] == "PLAIN":
+                self._send(":fake 905 %s :SASL: +" % PADOKA_NICK)
+            else:
+                import base64
+                try:
+                    raw = base64.b64decode(p[0], validate=True)
+                    # PLAIN: authzid(empty) NUL authcid NUL passwd
+                    ok = raw == b"\x00sasluser\x00saspw"
+                except Exception:
+                    ok = False
+                if ok:
+                    self.sasl_ok = True
+                    self._send(":fake 904 %s :SASL: success" % PADOKA_NICK)
+                else:
+                    self._send(":fake 907 %s :SASL: not accepted" % PADOKA_NICK)
+        elif cmd == "NICK":
             self._send(":fake 001 %s :Welcome to the fake net" % PADOKA_NICK)
             self._send(":fake 004 %s fake 1.0 f :net v" % PADOKA_NICK)
             self._send(":fake 005 %s :CHANTYPES=# MAXLEN=400 :fake" % PADOKA_NICK)
@@ -219,6 +236,9 @@ client_server:
 servers:
   - host: 127.0.0.1
     port: {server.port}
+    sasl:
+      username: sasluser
+      password: saspw
 user: tester
 nick: {PADOKA_NICK}
 realname: integration test
@@ -243,9 +263,15 @@ channel_info:
     srv_thread.start()
 
     try:
-        time.sleep(0.5)
+        # poll for connection: SASL adds two upstream round trips, so a fixed
+        # short sleep can race the reader's 0.2s pump cycle
+        deadline = time.time() + 10
+        while time.time() < deadline and not ndk.connected:
+            time.sleep(0.05)
         assert ndk.connected, "padoka did not connect to fake server"
         print("[ok] padoka connected to fake upstream server")
+        assert server.sasl_ok, "upstream SASL exchange did not complete"
+        print("[ok] upstream SASL PLAIN completed (904) before NICK/USER")
 
         # plaintext (non-TLS) client must not get through the IRC layer:
         # either a 908 reply or a TLS-level reset/closed connection

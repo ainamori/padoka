@@ -521,5 +521,148 @@ check("check_hostname:false honored with verify",
       and _ctx_ch.verify_mode == _ssl.CERT_REQUIRED)
 
 # ---------------------------------------------------------------------------
+section("Upstream SASL (padoka -> IRC server)")
+from padoka.server import sasl_plain_payload  # noqa: E402
+
+# PLAIN payload: base64(authzid NUL authcid NUL passwd), authzid empty
+_pp = sasl_plain_payload("myuser", "secret")
+_pp_raw = base64.b64decode(_pp)
+check("plain payload decodes to 3 NUL-separated fields",
+      _pp_raw == b"\x00myuser\x00secret")
+check("plain payload is ascii base64", _pp == _pp.encode().decode("ascii"))
+
+# server_list keeps the sasl block per server
+_cfg_sasl = _load_cfg(
+    "setting_name: cfgsasl\nloglevel: 0\nlog_dir: %s\n"
+    "client_server: {}\n"
+    "servers:\n"
+    "  - host: dev.example\n    port: 6697\n    ssl_params: {verify: true}\n"
+    "    sasl: {username: bob, password: pw123}\n"
+    "  - host: irc.example\n    port: 6697\n" % _tempfile.mkdtemp(prefix="pdklog_"))
+_sl = _cfg_sasl.server_list
+check("server_list has 2 entries", len(_sl) == 2)
+_dev = [s for s in _sl if s["host"] == "dev.example"][0]
+check("sasl block kept on matching server",
+      _dev.get("sasl") == {"username": "bob", "password": "pw123"})
+_check = [s for s in _sl if s["host"] == "irc.example"][0]
+check("sasl absent on other server", _check.get("sasl") is None)
+
+# login flow: SASL (905 continuation -> 904) then NICK/USER, then 001
+from padoka.server import PDKServer  # noqa: E402
+
+
+class _SASLCtx:  # fake conn handed to _server_main_proc
+    def __init__(self, replies):
+        self.sent = []
+        self.replies = list(replies)
+        self.host = "fake.host"
+        self.port = 6697
+
+    def send(self, m):
+        self.sent.append(m.to_s().rstrip("\r\n"))
+
+
+def _m(line):
+    return IRCMessage.parse(line)
+
+
+def _run_login(replies, sasl):
+    """Drive PDKServer._server_main_proc through login.
+
+    Returns (conn, raised): raised is the exception that stopped the
+    scripted flow (PDKReconnectToServer on failure; AssertionError once the
+    main loop runs out of replies after a successful welcome).
+    """
+    srv = PDKServer.__new__(PDKServer)
+    # setattr() for the test doubles: keeps mypy from flagging method
+    # reassignment while still driving the real _server_main_proc
+    setattr(srv, "_config", types.SimpleNamespace(
+        nick="mynick", away_nick=None, user="myuser", hostname="myhost",
+        servername="*", realname="rt", mode=None,
+        default_channels=[], login_channels=[], channel_info={},
+        notify=types.SimpleNamespace(ready=lambda: None)))
+    srv.state = PDKState(srv)
+    srv.state.set_nick("mynick")
+    setattr(srv, "_server_pass", None)
+    setattr(srv, "_server_sasl", sasl)
+    setattr(srv, "_connected", False)
+    setattr(srv, "_isupport", {})
+    conn = _SASLCtx(replies)
+
+    def recv_from_server(c):
+        if not conn.replies:
+            raise AssertionError("upstream exhausted")
+        return conn.replies.pop(0)
+
+    setattr(srv, "_recv_from_server", recv_from_server)
+    setattr(srv, "client_count", lambda: 0)
+    setattr(srv, "_join_to_channel", lambda ch: conn.sent.append("JOIN %s" % ch))
+    setattr(srv, "_enter_away", lambda: None)
+    setattr(srv, "invoke_event", lambda name, *a: None)
+    setattr(srv, "send_to_bot", lambda *a: True)
+    setattr(srv, "_send_to_clients", lambda m: None)
+    setattr(srv, "_logger", types.SimpleNamespace(
+        slog=lambda m: None, dlog=lambda m: None, logging=lambda m: None))
+
+    # stop marker: after the welcome loop, the main loop consumes it and the
+    # next empty recv raises AssertionError
+    conn.replies.append(_m(":fake 999 x"))
+    raised = None
+    try:
+        PDKServer._server_main_proc(srv, conn)  # type: ignore[arg-type]
+    except Exception as e:
+        raised = e
+    return conn, raised
+
+# scripted: 905 continuation -> 904 success -> 001 welcome
+_SASL = {"username": "sasluser", "password": "saspw"}
+ctx, _err = _run_login([
+    _m(":fake 905 mynick :SASL: +"),
+    _m(":fake 904 mynick :SASL: success"),
+    _m(":fake 001 mynick :Welcome"),
+], sasl=_SASL)
+sent = "\n".join(ctx.sent)
+check("sasl: AUTHENTICATE PLAIN sent first",
+      ctx.sent[0] == "AUTHENTICATE PLAIN")
+check("sasl: payload sent on 905 continuation",
+      "AUTHENTICATE " + sasl_plain_payload("sasluser", "saspw") in sent)
+check("sasl: NICK+USER sent only after 904",
+      sent.index("AUTHENTICATE") < sent.index("NICK mynick")
+      < sent.index("USER myuser myhost * rt"))
+check("sasl: login completed to welcome", "NICK mynick" in sent)
+
+# scripted: `AUTHENTICATE +` continuation form (non-numeric)
+ctx, _err = _run_login([
+    _m(":fake AUTHENTICATE +"),
+    _m(":fake 904 mynick :SASL: success"),
+    _m(":fake 001 mynick :Welcome"),
+], sasl=_SASL)
+check("sasl: AUTHENTICATE + continuation handled",
+      any(s.startswith("AUTHENTICATE ") and s != "AUTHENTICATE PLAIN"
+          for s in ctx.sent) and "NICK mynick" in "\n".join(ctx.sent))
+
+# scripted: 907 failure -> must raise PDKReconnectToServer
+from padoka import errors as _E  # noqa: E402
+_ctx, _err = _run_login([
+    _m(":fake 905 mynick :SASL: +"),
+    _m(":fake 907 mynick :SASL: not accepted"),
+], sasl=_SASL)
+check("sasl: 907 raises reconnect", isinstance(_err, _E.PDKReconnectToServer))
+
+# sasl configured but no password -> skip SASL, warn, register normally
+_ctx, _err = _run_login([
+    _m(":fake 001 mynick :Welcome"),
+], sasl={"username": "u", "password": ""})
+check("sasl: empty password skips AUTHENTICATE",
+      not any(s.startswith("AUTHENTICATE") for s in _ctx.sent)
+      and _ctx.sent[0] == "NICK mynick")
+
+# no sasl configured -> straight NICK/USER (legacy path unchanged)
+ctx3, _err = _run_login([_m(":fake 001 mynick :Welcome")], sasl=None)
+check("no sasl: first command is NICK", ctx3.sent[0] == "NICK mynick")
+check("no sasl: no AUTHENTICATE sent",
+      not any(s.startswith("AUTHENTICATE") for s in ctx3.sent))
+
+# ---------------------------------------------------------------------------
 print("\n%d passed, %d failed" % (_passed, _failed))
 sys.exit(1 if _failed else 0)

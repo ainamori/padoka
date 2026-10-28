@@ -37,26 +37,37 @@ client_server:
 # --------------------------------------------------------------- IRC サーバー
 # 接続先 IRC サーバー。複数指定するとランダム選択し、
 # 再接続時にローテーション。 TLS 利用は ssl_params を追加。
+# SASL 利用は sasl: {username, password} を追加（NICK 前の AUTHENTICATE PLAIN）。
 servers:
-  - host: irc.ircnet.ne.jp     # メインドメイン（DNS RoundRobin）
-    port: 6697                 # SSL/TLS（Let's Encrypt 発行）
-    pass: null
-    ssl_params:
-      verify: true
-      # ircnet は Let's Encrypt 発行。検証失敗（unable to get local issuer）は
-      # OS の CA ストアに ISRG Root X2 が無いのが主因。対処:
-      #   1) ストア更新: dnf update ca-certificates && update-ca-trust (root)
-      #   2) 直らない場合: scripts/fetch-upstream-cert.sh dh.ircnet.ne.jp 6697
-      #      config/certs/ircnet-ca.pem  でピンニング（leaf を除いたチェーン+
-      #      ISRG Root を自動作成）し、下記を有効化:
-      # ca_cert: config/certs/ircnet-ca.pem
-  - host: dh.ircnet.ne.jp      # デッドホスト（固定 IP 125.6.255.10）
+  # - host: irc.ircnet.ne.jp     # メインドメイン（DNS RoundRobin）
+  #   port: 6697                 # SSL/TLS（Let's Encrypt 発行）
+  #   pass: null
+  #   ssl_params:
+  #     verify: true
+  #     # ircnet は Let's Encrypt 発行のため verify: true のままで接続できる。
+  #     # 自己署名/私有 CA の上流に差し替える場合のみ ca_cert が必要:
+  #     # scripts/fetch-upstream-cert.sh <host> <port> で診断・ピンニング。
+  #     # ca_cert: /path
+  # - host: dh.ircnet.ne.jp      # デッドホスト（固定 IP 125.6.255.10）
+  #   port: 6697
+  #   pass: null
+  #   ssl_params:
+  #     verify: true
+  #     # ca_cert: /path
+  # -- 海外からの接続用（開発サーバー。予告なく再起動される） --
+  # irc / dh の一般接続は日本国内限定。海外（GCP 等）から接続すると
+  # login 直後に  ERROR :Closing Link: ... (Unauthorized connection)  になる。
+  # 海外では本サーバー + SASL が必要。username/password は自分の
+  # NickServ 登録情報に差し替えてください（password 空 = SASL スキップ）。
+  - host: dev.ircnet.ne.jp
     port: 6697
     pass: null
     ssl_params:
       verify: true
-      # ca_cert: config/certs/ircnet-ca.pem   # 同上 2) の場合
-  # 開発サーバー / IPv6 / 非TLS のオプションは config/padoka.ircnet.yml 参照
+    sasl:
+      username: padoka_py
+      password: ""           # <- NickServ パスワードを記入
+  # IPv6 / 非TLS のオプションは config/padoka.ircnet.yml 参照
   # - host: 127.0.0.1
   #   port: 6667
   #   pass: null

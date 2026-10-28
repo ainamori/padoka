@@ -25,7 +25,7 @@ ss -tlnp | grep 6667     # 使用済みなら PADOKA_CLIENT_PORT を変える
 
 | 項目 | 説明 |
 |------|------|
-| `servers` | 接続先 IRC サーバー（host / port / ssl_params） |
+| `servers` | 接続先 IRC サーバー（host / port / ssl_params / sasl） |
 | `nick` | IRC 上で使う nick（衝突すると自動で `0` が付加されて再試行） |
 | `client_server.pass` | IRC クライアント側の接続パスワード |
 | `client_server.acl` | 接続元を制限（`deny all` + 個別 `allow` を推奨） |
@@ -61,6 +61,40 @@ servers:
       verify: true
       # ca_cert: /path
 ```
+
+### 上流 SASL（ircv3 PLAIN）と ircnet の地理制約
+
+ircnet の**一般接続（irc / dh）は日本国内からのみ**です。海外（GCP 等）から
+接続すると NICK 送信前に
+
+```
+ERROR :Closing Link: <nick>[unknown@<IP>] (Unauthorized connection)
+```
+
+で拒否されます（証明書・CA ストアの問題ではありません）。
+
+海外から運用する場合は **dev サーバー + SASL** が必須です。`sasl:` を追加し、
+`username` / `password` に自分の NickServ 登録情報を入力してください。
+padoka は NICK 送信前に `AUTHENTICATE PLAIN` を行い、904 (success) を確認して
+から登録します。
+
+```yaml
+servers:
+  - host: dev.ircnet.ne.jp     # 開発サーバー（予告なく再起動される）
+    port: 6697
+    pass: null
+    ssl_params:
+      verify: true
+    sasl:
+      username: yournick
+      password: your_nickserv_password
+```
+
+- `password` が空のままの `sasl:` ブロックは「SASL をスキップ」の警告を出します
+  （空パスワードで 907 になるのを避けるため）。海外接続では必ず記入すること。
+- dev は開発・検証目的のため予告なく再起動されます。安定運用は日本国内の
+  ホスト（irc / dh、SASL 不要）へ移行することを推奨します。
+- SASL 詳細は [configuration.md](configuration.md#irc-サーバー接続) を参照。
 
 ## 3. 起動
 
@@ -160,12 +194,14 @@ docker stop padoka             # 正常終了 (SIGTERM)
 |------|-----------|
 | 起動直後に `Restarting` | ポート競合 or 設定エラー。`docker compose logs` を確認 |
 | `Connection closed by server` の繰り返し | nick 衝突 or ACL 拒否。nick 変更 / サーバー ACL を確認 |
+| login 直後に `ERROR :Closing Link: ... (Unauthorized connection)` | **ircnet の一般接続（irc/dh）は日本国内限定**。海外（GCP 等）から接続して発生。dev サーバー + `sasl:`（NickServ 認証）へ切替（「上流 SASL と地理制約」参照） |
 | IRC 接続できない（TLS） | `ssl_params.verify` / 証明書ストア。必要なら CA 指定 |
-| `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` | 公的 CA 発行（ircnet は Let's Encrypt）なら **OS の CA ストアが古い**。`dnf update ca-certificates && update-ca-trust`（root）。自己署名/私有 CA の場合は `scripts/fetch-upstream-cert.sh <host> <port>` で診断し `ca_cert` 固定（leaf を含めないこと） |
+| `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` | まず**最新の padoka を使っているか**（旧版は TLS コンテキストがシステム CA ストアを読まず、公的 CA 上流でも必ず発生した。修正済み）。それでも出るなら OS の CA ストアが古い可能性 → `dnf update ca-certificates && update-ca-trust`（root）。自己署名/私有 CA の場合は `scripts/fetch-upstream-cert.sh <host> <port>` で診断し `ca_cert` 固定（leaf を含めないこと） |
 | 証明書固定しても同じ VERIFY_FAILED が出る | **leaf を含むファイルが `ca_cert` にある**可能性が高い（信頼ストア内の leaf は検証を壊す）。padoka.yml の `ca_cert` を外す / leaf を除いたファイルに差し替える |
 | `failed during tls handshake`（上記以外） | SNI/ホスト名不一致 → 指紋確認後に `check_hostname: false` も検討。中間ポートで TLS を剥がれている可能性（プロキシ環境） |
 | クライアントが TLS で接続できない | 証明書指紋の未登録（自己署名）/ `-ssl_verify=off`。ホスト側のポート公開 (`PADOKA_CLIENT_PORT`) / `client_server.acl` も確認 |
-| SASL 認証で 907 が返る | `client_server.pass` とクライアント側の SASL パスワード不一致 |
+| （クライアント側）SASL 認証で 907 が返る | `client_server.pass` とクライアント（irssi 等）側の SASL パスワード不一致 |
+| （上流側）`SASL failed` / 907 がログに出る | `servers[].sasl.password` が NickServ パスワードと不一致、または空（空なら「SASL configured but no password」の警告が出て SASL をスキップ）。正しい NickServ 認証情報を入力 |
 | ボットが動かない | `bots:` に name が入っているか / プラグインの読み込みエラーをログで確認 |
 | ログが出ない | `loglevel` が低すぎる（デバッグは 3）。`log/` のボリュームも確認 |
 
