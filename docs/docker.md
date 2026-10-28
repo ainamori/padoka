@@ -69,9 +69,10 @@ IRC クライアント側（irssi 等）は `PADOKA_CLIENT_PORT` で指定した
 ## TLS / SASL
 
 クライアントポート（デフォルト 6667）は **TLS のみ** で動きます。
-イメージビルド時に自己署名証明書が `config/certs/padoka.crt` /
-`padoka.key` として生成されます（`config/certs/` は gitignore 済み）。
-SASL PLAIN 認証も有効で、パスワードは `client_server.pass` です。
+自己署名のサンプル証明書・秘密鍵が `config/certs/padoka.crt` /
+`padoka.key` としてリポジトリに同梱され、`COPY config/` でイメージに
+取り込まれます（存在しない場合のみビルド時に再生成）。 SASL PLAIN 認証も
+有効で、パスワードは `client_server.pass` です。
 
 irssi での接続例:
 

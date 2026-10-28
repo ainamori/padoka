@@ -14,6 +14,7 @@ import binascii
 import re
 import socket
 import queue
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -141,6 +142,16 @@ class PDKClient:
 
         self._send_motd(nick)
 
+        # The state dump below needs the proxy's upstream nick.  If a client
+        # connects before the proxy finishes registering upstream (startup or
+        # mid-reconnect), the nick is None and sending NICK/331/353 with it is
+        # a protocol error that crashes serialization.  Wait (keeping the
+        # connection healthy) until the nick is available; reject on timeout.
+        if not self._wait_for_ready(30.0):
+            self._send(self._rpl("401", nick,
+                                  "Padoka not registered upstream yet; please retry."))
+            return False
+
         self._send_command(Command.nick(self._state.nick()))
         cur_nick = self.manager.state.nick()
 
@@ -162,6 +173,50 @@ class PDKClient:
         self._send(self._rpl("375", nick, "- Padoka Message of the Day -"))
         self._send(self._rpl("372", nick, "- Enjoy IRC chat with Padoka chan!"))
         self._send(self._rpl("376", nick, "End of MOTD command."))
+
+    def _wait_for_ready(self, timeout: float) -> bool:
+        """Wait until the proxy has registered its nick upstream.
+
+        Keeps the connection healthy while waiting (pumps the send queue,
+        answers PING, honours QUIT).  Returns True once a nick is available,
+        False on timeout or a closed/dead connection.
+        """
+        deadline = time.time() + timeout
+        while not self._stop:
+            if self.manager.state.nick():
+                return True
+            if time.time() >= deadline:
+                return False
+            if not self._pump_sends():
+                return False
+            # drain any complete buffered lines first (answer PING, honour
+            # QUIT) so a multi-line recv is not stranded behind a timeout
+            drained = False
+            while b"\n" in self._buf:
+                drained = True
+                line, self._buf = self._buf.split(b"\n", 1)
+                if not line.strip():
+                    continue
+                msg = self._parse_line(line)
+                if msg is None:
+                    continue
+                if msg.command == "PING":
+                    self._send(Command.pong(*msg.params), logging=False)
+                elif msg.command == "QUIT":
+                    raise E.PDKQuitClient
+            if drained:
+                continue
+            # nothing buffered: bounded recv
+            try:
+                data = self.sock.recv(65535)  # governed by IO_POLL_TIMEOUT
+            except socket.timeout:
+                continue
+            except OSError:
+                return False
+            if not data:
+                return False
+            self._buf += data
+        return False
 
     # ------------------------------------------------------------ SASL (ircv3)
     # Supported mechanism: PLAIN, whose payload is
@@ -262,25 +317,17 @@ class PDKClient:
     def _recv_from_client(self) -> Optional[IRCMessage]:
         """Return the next IRC message, or None on EOF / write error.
 
-        Pumps the send queue before every (short-timeout) read so all
-        socket I/O stays on this single thread.
+        All socket I/O stays on this single thread: the send queue is pumped
+        before every step, and buffered lines are drained BEFORE a blocking
+        (short-timeout) recv.  A single recv() can deliver several lines at
+        once (clients commonly send NICK and USER together), so we must not
+        wait for a fresh recv before returning the lines already in _buf --
+        doing so strands them and hangs the login.
         """
         while not self._stop:
             if not self._pump_sends():
                 return None
-            try:
-                data = self.sock.recv(65535)
-            except socket.timeout:
-                continue
-            except OSError:
-                return None
-            if not data:
-                # connection closed
-                if self._buf:
-                    line, self._buf = self._buf.split(b"\n", 1)
-                    return self._parse_line(line)
-                return None
-            self._buf += data
+            # 1) drain any complete lines already buffered
             while b"\n" in self._buf:
                 line, self._buf = self._buf.split(b"\n", 1)
                 if not line.strip():
@@ -295,6 +342,20 @@ class PDKClient:
                     continue
                 self.logger.dlog("[C>] %s" % msg.to_s())
                 return msg
+            # 2) no complete line buffered: wait (bounded) for more data
+            try:
+                data = self.sock.recv(65535)
+            except socket.timeout:
+                continue
+            except OSError:
+                return None
+            if not data:
+                # EOF: return any trailing partial line, else None
+                if self._buf:
+                    line, self._buf = self._buf.split(b"\n", 1)
+                    return self._parse_line(line)
+                return None
+            self._buf += data
         return None
 
     def _parse_line(self, line: bytes) -> Optional[IRCMessage]:

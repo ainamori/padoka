@@ -26,12 +26,11 @@ client_server:
   #     deny all
   # -- TLS --
   # 証明書/秘密鍵を指定するとクライアントポートは TLS のみになる
-  # （平文接続は拒否される）。 自己署名の再生成例:
-  #   openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-  #     -keyout config/certs/padoka.key -out config/certs/padoka.crt \
-  #     -subj "/CN=padoka" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+  # （平文接続は拒否される）。
+  # config/certs/padoka.{crt,key} はリポジトリに同梱された自己署名の
+  # サンプル証明書・秘密鍵（初期動作確認用）。 本番で公開する場合は
+  # CA 発行証や Let's Encrypt 等へ差し替えてください。
   # TLS を無効化するには次の 2 行をコメントアウトする。
-  # 本番で公開する場合は CA 発行証や Let's Encrypt 等へ差し替えてください。
   ssl_cert_file: config/certs/padoka.crt
   ssl_key_file: config/certs/padoka.key
 

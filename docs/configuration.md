@@ -30,8 +30,10 @@ client_server:
   片方だけの指定は無効です。
 - 証明書の読み込みに失敗した場合はクライアントポート自体を開きません
   （fail closed。平文へフォールバックしません）。
-- Docker イメージではビルド時に自己署名証明書が `config/certs/padoka.crt` /
-  `padoka.key` として生成されます（`config/certs/` は gitignore 済み）。
+- 自己署名のサンプル証明書・秘密鍵が `config/certs/padoka.crt` /
+  `padoka.key` としてリポジトリに同梱されています（初期動作確認用）。
+  Docker イメージでは `COPY config/` で取り込まれ、存在しない場合のみ
+  ビルド時に再生成されます。
   公開ホストで運用する場合は CA 発行の証明書に差し替えてください。
 
 ### SASL（ircv3）

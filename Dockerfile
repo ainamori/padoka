@@ -18,16 +18,19 @@ COPY src/ ./src/
 COPY plugins/ ./plugins/
 COPY config/ ./config/
 
-# Self-signed TLS cert for the client port (config/certs is gitignored,
-# so it is generated at build time).  Replace with a real CA-issued
-# cert/key before exposing the port publicly.
-RUN mkdir -p /app/config/certs && \
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-        -keyout /app/config/certs/padoka.key \
-        -out /app/config/certs/padoka.crt \
-        -subj "/CN=padoka" \
-        -addext "subjectAltName=DNS:localhost,DNS:padoka,IP:127.0.0.1" && \
-    chmod 600 /app/config/certs/padoka.key
+# TLS cert for the client port.  A self-signed sample pair is bundled in the
+# repo (config/certs, copied above) and used as-is; it is only regenerated
+# at build time if missing.  Replace with a real CA-issued cert/key before
+# exposing the port publicly.
+RUN if [ ! -f /app/config/certs/padoka.crt ] || [ ! -f /app/config/certs/padoka.key ]; then \
+        mkdir -p /app/config/certs && \
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+            -keyout /app/config/certs/padoka.key \
+            -out /app/config/certs/padoka.crt \
+            -subj "/CN=padoka" \
+            -addext "subjectAltName=DNS:localhost,DNS:padoka,IP:127.0.0.1" && \
+        chmod 600 /app/config/certs/padoka.key; \
+    fi
 
 # Entry point script (exec form compatible, receives SIGTERM directly).
 RUN printf '#!/bin/sh\nexec python -m padoka -c "${PADOKA_CONFIG:-/app/config/padoka.yml}" "$@"\n' \

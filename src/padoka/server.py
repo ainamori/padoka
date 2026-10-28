@@ -142,6 +142,13 @@ class PDKServer:
                     return
         finally:
             self._exiting = True
+            # close the listener so a thread blocked in accept() wakes up
+            srv = self._client_srv
+            if srv is not None:
+                try:
+                    srv.close()
+                except OSError:
+                    pass
             for t in (self._server_thread, self._clients_thread, self._timer_thread):
                 if t and t.is_alive():
                     t.join(timeout=3)
@@ -302,7 +309,15 @@ class PDKServer:
 
     def _recv_from_server(self, conn: Connection) -> IRCMessage:
         while True:
-            q = self._in_q.get()
+            # bounded get so a shutdown (_exiting) is noticed within ~1s even
+            # while idle/connected upstream; raises PDKQuitProgram to unwind
+            # the server thread cleanly instead of waiting for the join.
+            try:
+                q = self._in_q.get(timeout=1.0)
+            except queue.Empty:
+                if self._exiting:
+                    raise E.PDKQuitProgram
+                continue
             if q is None:  # EOF sentinel from reader
                 raise ConnectionClosed("upstream connection closed")
             if isinstance(q, tuple) and q[0] is EVENT:
@@ -419,6 +434,16 @@ class PDKServer:
 
     # ------------------------------------------------------------- events
     def invoke_event(self, name: str, *args) -> None:
+        if name in ("quit_program", "restart_program"):
+            # Global exit must take effect immediately: set _exiting and
+            # wake the main thread directly.  If these were routed through
+            # _in_q, the server thread would only consume them while it is
+            # in _recv_from_server -- during _sleep_reconnect that can be
+            # up to reconnect_delay seconds, so Ctrl+C / /PADOKA QUIT
+            # would appear to do nothing.
+            self._exiting = True
+            self._ctrl_q.put("quit" if name == "quit_program" else "restart")
+            return
         self._in_q.put((EVENT, name, *args))
 
     def _exec_event(self, ev) -> None:
@@ -430,12 +455,8 @@ class PDKServer:
             except Exception as e:
                 self._logger.slog("error occurred while reloading configuration")
                 self.ndk_error(e)
-        elif name == "quit_program":
-            self._exiting = True
-            self._ctrl_q.put("quit")
-        elif name == "restart_program":
-            self._exiting = True
-            self._ctrl_q.put("restart")
+        # NB: quit_program / restart_program never reach _exec_event; they are
+        # handled directly in invoke_event (immediate _exiting + _ctrl_q).
         elif name == "reconnect_to_server":
             self._connected = False
             raise E.PDKReconnectToServer
@@ -498,10 +519,16 @@ class PDKServer:
                 self.ndk_error(RuntimeError("TLS certificate load failed: %s" % e))
                 return
 
+        # 1s accept timeout so the loop can poll _exiting and shut down
+        # promptly (a plain blocking accept() is not woken by close() from
+        # another thread on Linux, which delayed Ctrl+C shutdown).
+        srv.settimeout(1.0)
         try:
             while not self._exiting:
                 try:
                     csock, addr = srv.accept()
+                except (socket.timeout, TimeoutError):
+                    continue
                 except OSError:
                     break
                 threading.Thread(target=self._handle_client,

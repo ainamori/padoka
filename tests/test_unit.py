@@ -385,6 +385,26 @@ check("login sasl saw 904", res.get("ok") and any(" 904 " in l for l in res["ok"
 welcome = _sasl_read(sa, 8)
 check("login via sasl -> 001 welcome", any(" 001 " in l for l in welcome))
 
+# regression: NICK + USER coalesced into a SINGLE write must not hang _login.
+# (a single recv() can deliver both lines; _buf must be drained before recv)
+sa2, c2 = _sasl_client(pass_=None)  # no /PASS required
+res2: dict = {}
+
+
+def _drive_coalesced():
+    time.sleep(0.1)
+    sa2.sendall(b"NICK coclient\r\nUSER coclient 0 0 :coclient\r\n")
+
+
+threading.Thread(target=_drive_coalesced, daemon=True).start()
+_lt = threading.Thread(target=lambda: res2.update(v=c2._login()), daemon=True)
+_lt.start()
+_lt.join(timeout=5)
+check("coalesced NICK+USER login does not hang",
+      _lt.is_alive() is False and res2.get("v") is True)
+if _lt.is_alive():
+    print("  (login thread still alive -> hung on coalesced lines)")
+
 # ---------------------------------------------------------------------------
 print("\n%d passed, %d failed" % (_passed, _failed))
 sys.exit(1 if _failed else 0)

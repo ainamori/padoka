@@ -13,8 +13,10 @@ log/
 padoka_fatal_error
 message.json        # messagebot の伝言データ（message_file のデフォルト）
 
-# self-signed TLS material (generate locally; never commit keys)
-config/certs/
+# TLS: config/certs/padoka.{crt,key} は自己署名のサンプル証明書・鍵を
+# 追跡しています（Docker/直接実行の初期動作用）。
+# 本番で CA 発行に差し替えたり再生成したりしたら変更として表示されるよう
+# 意図的に無視対象にしない（秘密鍵の漏洩防止には必ず本番用を別管理せよ）。
 
 # local environment overrides
 .env

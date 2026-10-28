@@ -120,9 +120,8 @@ irssi
 /#yourchannel
 ```
 
-> 直接実行時は自己署名証明書を先に用意してください:
-> `config/padoka.yml` の `ssl_cert_file` / `ssl_key_file` の
-> 再生成例を参照（openssl req -x509 ...）。
+> 自己署名のサンプル証明書が `config/certs/` にリポジトリ同梱されているため、
+> 追加の証明書作成は不要です（本番は CA 発行へ差し替え）。
 
 ---
 
