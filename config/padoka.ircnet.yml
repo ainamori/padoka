@@ -1,0 +1,140 @@
+# Padoka instance config: ircnet (ircnet.ne.jp)
+# docker-compose.instances.yml の padoka-ircnet サービスが読み込む。
+# 1 instance = 1 上流 IRC ネットワーク = 1 クライアントポート。
+#
+# 起動:  docker compose -f docker-compose.instances.yml up -d padoka-ircnet
+#        (単体起動: python -m padoka -c config/padoka.ircnet.yml)
+#
+# ircnet.ne.jp サーバー一覧（公式ドキュメントより）:
+#
+#   Server                     IP                        Port          備考
+#   ------------------------------------------------------------------------
+#   [IPv4]
+#   irc.ircnet.ne.jp                                     6660-6669     DNS RoundRobin
+#   dh.ircnet.ne.jp          [125.6.255.10]              6660-6669
+#                                                       6679,6697     SSL/TLS & SASL
+#   dev.ircnet.ne.jp         [103.167.46.70]             6660-6669     SASL-open 開発サーバー
+#                                                       6679,6697     SSL/TLS & SASL
+#   irc.media.kyoto-u.ac.jp  [130.54.120.197]            6660-6669     2025/9/2～ 故障のため停止中
+#   irc.huie.hokudai.ac.jp   [133.50.80.20]              6660-6669     停止中
+#   [IPv6]
+#   irc6.ircnet.ne.jp                                    6660-6669     DNS RoundRobin
+#   dh6.ircnet.ne.jp         [2407:3000:6a:192::6667]    6660-6669
+#                                                       6679,6697     SSL/TLS & SASL
+#   dev.ircnet.ne.jp         [2001:df6:a680:1014::7000] 6660-6669     SASL-open 開発サーバー
+#
+# 留意:
+#   * dev.ircnet.ne.jp は開発・検証目的のため予告なく再起動される。
+#     長期間の運用には irc / dh を使うこと（デフォルト設定もこれ）。
+#   * 上流サーバー側の SASL (AUTHENTICATE) は padoka は未対応。
+#     nick の識別は identifynickserv ボット（NickServ /identify）で行う。
+#   * irc.media.kyoto-u.ac.jp / irc.huie.hokudai.ac.jp は停止中のため
+#     servers に入れていない。再開されてから追加すること。
+
+setting_name: padoka-ircnet   # ログ namespace: log/padoka-ircnet-*/
+loglevel: 2
+padoka_server_name: PadokaProgram
+
+# ------------------------------------------------------------- クライアントサーバー
+client_server:
+  host: null
+  port: 6667               # コンテナ内ポートは全 instance で 6667 のまま。
+                           # ホスト側で 6669 として公開する(ポートマッピング参照)。
+  pass: PadokaPassWordIrcnet  # instance ごとに別のパスワード
+  sasl: true               # SASL (ircv3) PLAIN 認証（pass と同じ値で検証）
+  acl: null
+  # TLS（自己署名はイメージビルド時に config/certs/ に生成される）
+  ssl_cert_file: config/certs/padoka.crt
+  ssl_key_file: config/certs/padoka.key
+
+# ------------------------------------------------------------- Web UI（任意）
+webui:
+  enabled: false
+  host: 0.0.0.0
+  port: 8082               # 有効化する場合は instance ごとに port を変えてください
+  pass: ""
+
+# --------------------------------------------------------------- IRC サーバー
+# TLS (6697) 優先。複数指定するとランダム選択し、再接続時にローテーション。
+servers:
+  - host: irc.ircnet.ne.jp     # メインドメイン（DNS RoundRobin）
+    port: 6697                 # SSL/TLS & SASL（旧 SSL ポートは 6679）
+    pass: null
+    ssl_params:
+      verify: true
+  - host: dh.ircnet.ne.jp      # デッドホスト（固定IP: 125.6.255.10）
+    port: 6697
+    pass: null
+    ssl_params:
+      verify: true
+
+  # ---- 任意（必要ならコメント解除）----
+  # 開発サーバー（SASL-open・海外からでも接続可。予告なく再起動されるため
+  # 開発・検証用途。通常運用では無効のまま）
+  # - host: dev.ircnet.ne.jp
+  #   port: 6697
+  #   pass: null
+  #   ssl_params:
+  #     verify: true
+
+  # IPv6（IPv6 接続可能な環境の場合。Docker bridge では host の IPv6 設定
+  # 次第のため、host ネットワーク版で試すのが確実）
+  # - host: irc6.ircnet.ne.jp
+  #   port: 6697
+  #   pass: null
+  #   ssl_params:
+  #     verify: true
+  # - host: dh6.ircnet.ne.jp
+  #   port: 6697
+  #   pass: null
+  #   ssl_params:
+  #     verify: true
+
+  # 非TLS（6660-6669 の平文ポート。暗号化されないため非推奨）
+  # - host: irc.ircnet.ne.jp
+  #   port: 6667
+  #   pass: null
+
+# --------------------------------------------------------------- ユーザー情報
+user: padoka
+nick: padoka_ircnet        # この instance（ircnet）専用の nick
+hostname: null
+servername: "*"
+realname: padoka user
+away_message: away
+away_nick: null
+quit_message: "Quit Padoka"
+
+reconnect_delay: 150
+
+# --------------------------------------------------------------- ログ出力
+log_dir: /app/log          # コンテナ内。volume は instance ごとに分離
+default_log:
+  file: "${setting_name}-${channel_name}/%y%m%d.log"
+  time_format: "%H:%M:%S"
+
+# --------------------------------------------------------------- チャンネル
+channel_info:
+  "#test":
+    timing: startup        # 常駐するチャネルに変更する
+
+# --------------------------------------------------------------- ボット
+plugins_dir: ./plugins
+bots:
+  - name: backlogbot
+    talker: false
+    prefix: "BL"
+    sender: "backlogbot"
+    time_format: "%m/%d-%H:%M"
+  - name: autoawaybot
+    threshold: 900
+    message: "Away"
+  # nick が登録済みの場合、接続時の自動識別（上流 SASL の代わり）
+  # - name: identifynickserv
+  #   nickserv: "NickServ"
+  #   nick: "padoka_ircnet"
+  #   pass: "nickserv_password"
+
+# --------------------------------------------------------------- その他
+backlog_lines: 20
+filename_encoding: utf8

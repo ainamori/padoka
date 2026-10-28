@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "padoka"
+version = "0.10.1"
+description = "Padoka - IRC client/server proxy"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = ["PyYAML>=5.4"]
+
+[project.scripts]
+padoka = "padoka.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

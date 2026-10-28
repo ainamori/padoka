@@ -1,0 +1,20 @@
+# Avoid sending unnecessary files to the Docker build context
+.git
+.gitignore
+.env
+.env.example
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Logs
+log/
+
+# Tests & docs (not needed at runtime)
+tests/
+docs/

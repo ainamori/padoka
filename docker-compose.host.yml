@@ -1,0 +1,35 @@
+# Padoka - docker compose（host ネットワーク版）
+#
+#   docker compose -f docker-compose.host.yml up -d
+#
+# network_mode: host を使用し、コンテナが client_server.port（デフォルト
+# 6667）に直接バインドします。ポート公開・NAT なしの高速な構成です。
+# Linux のみ対応。
+
+services:
+  padoka:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: padoka
+    image: padoka:py
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PADOKA_CONFIG: /app/config/padoka.yml
+      TZ: ${TZ:-UTC}
+    # 生存判定: クライアントポート(6667)で TLS ハンドシェイクが通れば healthy。
+    # （デフォルト設定は TLS のみ。client_server.ssl_cert_file を無効化した場合は
+    #   "import socket; socket.create_connection(('127.0.0.1', 6667), 3)" に戻す）
+    # YAML で client_server.port を変えた場合は 6667 も合わせて更新すること。
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket,ssl;c=ssl.create_default_context();c.check_hostname=False;c.verify_mode=ssl.CERT_NONE;c.wrap_socket(socket.create_connection(('127.0.0.1',6667),3))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    volumes:
+      - padoka-log:/app/log
+
+volumes:
+  padoka-log:

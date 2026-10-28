@@ -1,0 +1,49 @@
+# Padoka - 複数 IRC サーバ同時接続（1 サーバ = 1 コンテナ = 1 config）
+#
+#   docker compose -f docker-compose.instances.yml up -d
+#
+#   * 各サービスは同じイメージ padoka:py を使い、PADOKA_CONFIG だけを変える。
+#   * コンテナ内の client_server.port はすべて 6667 のままで、
+#     ホスト側ポート（6669 / ...）で instance を区別する。
+#     IRC クライアントは「サーバ 1 個 = 接続先 1 個」として設定する。
+#       - ircnet: 127.0.0.1:6669
+#   * ログは instance ごとに分離する（./logs/<instance> へマウント）。
+#     （共有ディレクトリにすると log/.channel_ids.yml が衝突する）
+#
+#   単体起動・停止:
+#     docker compose -f docker-compose.instances.yml up -d padoka-ircnet
+#     docker compose -f docker-compose.instances.yml stop padoka-ircnet
+#
+#   host ネットワーク版にする場合は、各サービスの ports: を外し
+#   network_mode: host を付け、config 内の port を
+#   6667 / 6668 と instance ごとに分けてください。
+
+services:
+  padoka-ircnet:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: padoka-ircnet
+    image: padoka:py
+    restart: unless-stopped
+    environment:
+      PADOKA_CONFIG: /app/config/padoka.ircnet.yml
+      TZ: ${TZ:-UTC}
+    ports:
+      # ホスト 6669 -> コンテナ 6667（ircnet instance の client port）
+      - "6669:6667/tcp"
+    healthcheck:
+      # TLS ハンドシェイクが通れば healthy（デフォルト設定は TLS のみ）
+      test: ["CMD", "python", "-c", "import socket,ssl;c=ssl.create_default_context();c.check_hostname=False;c.verify_mode=ssl.CERT_NONE;c.wrap_socket(socket.create_connection(('127.0.0.1',6667),3))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    volumes:
+      # ホストの ./logs/padoka-ircnet に保存される。
+      - ./logs/padoka-ircnet:/app/log
+
+# 追加 instance を作る場合は：
+#   1. config/padoka.<name>.yml を複製して編集（setting_name / nick /
+#      servers / client_server.pass / channel_info / bots / webui port）
+#   2. ここに services 1 つ追加（PADOKA_CONFIG とホストポートと volume を変える）

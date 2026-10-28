@@ -1,0 +1,42 @@
+# Padoka - docker compose
+#
+#   docker compose up -d
+#
+# ネットワークについて:
+#   * デフォルトは bridge。IRC クライアントポートをホストに公開します。
+#     6667 が使用中の場合は PADOKA_CLIENT_PORT で変更:
+#         PADOKA_CLIENT_PORT=16667 docker compose up -d
+#   * ホストに直接バインド（NAT なし）する場合は
+#     docker-compose.host.yml（network_mode: host）を使用。
+
+services:
+  padoka:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: padoka
+    image: padoka:py
+    restart: unless-stopped
+    environment:
+      PADOKA_CONFIG: /app/config/padoka.yml
+      TZ: ${TZ:-UTC}
+    # クライアント（irssi 等）が接続するポート。
+    # YAML の client_server.port と一致させる（デフォルト 6667）。
+    ports:
+      - "${PADOKA_CLIENT_PORT:-6667}:6667/tcp"
+    # 生存判定: クライアントポート(6667)で TLS ハンドシェイクが通れば healthy。
+    # （デフォルト設定は TLS のみ。client_server.ssl_cert_file を無効化した場合は
+    #   "import socket; socket.create_connection(('127.0.0.1', 6667), 3)" に戻す）
+    # YAML で client_server.port を変えた場合は 6667 も合わせて更新すること。
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket,ssl;c=ssl.create_default_context();c.check_hostname=False;c.verify_mode=ssl.CERT_NONE;c.wrap_socket(socket.create_connection(('127.0.0.1',6667),3))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    volumes:
+      # ログの永続化（チャネル/システム/個人チャット/デバッグ）
+      - padoka-log:/app/log
+
+volumes:
+  padoka-log:

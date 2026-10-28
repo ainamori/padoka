@@ -1,0 +1,174 @@
+# Padoka - サンプル設定
+# 起動:  python -m padoka -c config/padoka.yml
+#        padoka -c config/padoka.yml
+#
+# キーは snake_case。完全なデフォルト値は src/padoka/config.py を参照。
+
+setting_name: mypadoka
+loglevel: 2                # 0 quiet, 1 ch log, 2 normal, 3 debug
+padoka_server_name: PadokaProgram
+
+# ------------------------------------------------------------- クライアントサーバー
+client_server:
+  host: null               # バインド対象インターフェース。null => 0.0.0.0
+  port: 6667               # null => リスニングしない
+  pass: PadokaPassWord     # IRC クライアントが /PASS で送るパスワード（SASL PLAIN でも検証）
+  sasl: true               # SASL (ircv3) PLAIN 認証を有効。false で /PASS のみ
+  acl: null                # null => 全許可（デフォルト）
+  # ソースIPで制限する場合、上から順に判定（最初一致で確定。
+  # 一致しなければ許可）。 具体的な allow を deny all より前に書く。
+  # 例（LAN のみ許可）:
+  #   acl: |
+  #     allow 127.0.0.1
+  #     allow 192.168.0.0/24
+  #     allow 10.0.0.0/8
+  #     allow 172.16.0.0/12
+  #     deny all
+  # -- TLS --
+  # 証明書/秘密鍵を指定するとクライアントポートは TLS のみになる
+  # （平文接続は拒否される）。 自己署名の再生成例:
+  #   openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+  #     -keyout config/certs/padoka.key -out config/certs/padoka.crt \
+  #     -subj "/CN=padoka" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+  # TLS を無効化するには次の 2 行をコメントアウトする。
+  # 本番で公開する場合は CA 発行証や Let's Encrypt 等へ差し替えてください。
+  ssl_cert_file: config/certs/padoka.crt
+  ssl_key_file: config/certs/padoka.key
+
+# --------------------------------------------------------------- IRC サーバー
+# 接続先 IRC サーバー。複数指定するとランダム選択し、
+# 再接続時にローテーション。 TLS 利用は ssl_params を追加。
+servers:
+  - host: irc.ircnet.ne.jp     # メインドメイン（DNS RoundRobin）
+    port: 6697                 # SSL/TLS
+    pass: null
+    ssl_params:
+      verify: true
+  - host: dh.ircnet.ne.jp      # デッドホスト（固定 IP 125.6.255.10）
+    port: 6697
+    pass: null
+    ssl_params:
+      verify: true
+  # 開発サーバー / IPv6 / 非TLS のオプションは config/padoka.ircnet.yml 参照
+  # - host: 127.0.0.1
+  #   port: 6667
+  #   pass: null
+
+# --------------------------------------------------------------- ユーザー情報
+user: padoka
+nick: padoka_py
+hostname: null             # null => システムホスト名を使用
+servername: "*"
+realname: padoka user
+mode: null
+away_message: away
+away_nick: null            # null => クライアント不在時に nick を変えない
+quit_message: "Quit Padoka"
+
+reconnect_delay: 150       # 再接続待ち時間（秒）
+
+# --------------------------------------------------------------- ログ出力
+log_dir: ./log
+default_log:
+  file: "${setting_name}-${channel_name}/%y%m%d.log"
+  time_format: "%H:%M:%S"
+
+# --------------------------------------------------------------- チャンネル
+# timing: startup（デフォルト）| login
+# 追加: key（参加キー）, initial_mode, auto_create, backlog_lines
+channel_info:
+  "#test":
+    timing: startup
+    # initial_mode: "+nt"
+    # key: secret
+    # backlog_lines: 20
+
+# --------------------------------------------------------------- ボット
+# プラグインのモジュール/クラス名、または name + 設定の dict。
+# プラグイン .py ファイルは plugins_dir に配置。
+plugins_dir: ./plugins
+bots:
+  - name: backlogbot
+    talker: false
+    prefix: "BL"
+    sender: "backlogbot"
+    time_format: "%m/%d-%H:%M"
+  - name: autoawaybot
+    threshold: 900          # 15分間操作がないと AWAY
+    message: "Away"
+
+  # ===== 以下は利用したいボットをコメント解除して有効にしてください =====
+  # -- 接続管理 --
+  # - name: sendpingbot        # 定期 PING をクライアント全員へ送信
+  # - name: identifynickserv   # 接続時に NickServ /identify
+  #   nickserv: "NickServ"
+  #   nick: "padoka"
+  #   pass: "nickserv_password"
+  # - name: autodumpbot        # 参加チャネル情報を自動ダンプ
+  #   dump_style: "yaml"       # yaml / json / text
+  # - name: modemanager        # 参加時にモードを自動適用
+  #   wait: 5
+  #   modes: |
+  #     [all]
+  #     +o=*.jp
+  # - name: autoop             # 指定ユーザーに自動 OP
+  #   friends:
+  #     - nick: "myuser1"
+  # - name: opshop             # 全員に自動 OP
+  # -- ログ / 定期 --
+  # - name: timestampbot
+  #   interval: 3600
+  #   stampformat: "== %y/%m/%d-%H:%M:%S ===="
+  # - name: cronbot
+  #   message: "cron test"
+  # -- 伝言 / メール --
+  # - name: messagebot
+  #   message_file: "message.json"
+  #   channels: ["#mychannel"]
+  # - name: mailcheckbot
+  #   maildir: ["~/Maildir/.ml.example"]
+  #   channels: ["#mychannel"]
+  #   template: "biff: %{subject}s"
+  # -- サイコロ / ランダム --
+  # - name: xibot
+  #   ch: ".*"
+  # - name: roulettebot
+  #   ch: ".*"
+  # -- Web / 検索 --
+  # - name: titlebot
+  #   timeout: 10              # SSRF 防御あり
+  # - name: rss_checkbot
+  #   rss_paths: ["https://www.python.org/feed/"]
+  #   ch: "#news"
+  #   tm: 30
+  # - name: githubissuesbot
+  #   owner: "myorg"
+  #   repo: "myrepo"
+  #   ch: "#dev"
+  #   tm: 30
+  # - name: googlebot          # api_key と cx 必須
+  #   api_key: "YOUR_API_KEY"
+  #   cx: "YOUR_CSE_ID"
+  # - name: opensearchbot
+  #   bot_name: "bing"
+  #   html: "http://www.bing.com/search?q={searchTerms}"
+  #   rss: "http://api.search.live.com/rss.aspx?source=web&query={searchTerms}"
+  # - name: codesearchbot
+  #   ch: ".*"
+  # - name: gonzuibot
+  #   ch: ".*"
+  # - name: tenkibot
+  #   ch: ".*"
+  # -- 危険機能（ACL で制限を強く推奨）--
+  # - name: evalbot            # 個人メッセージ宛に Python 式評価
+  # - name: shellbot           # 個人メッセージ宛に shell 実行
+  # -- テスト --
+  # - name: samplebot
+
+# --------------------------------------------------------------- その他
+backlog_lines: 20
+filename_encoding: utf8
+
+# メッセージフィルター（コールラブル。未設定なら全て通過）
+# privmsg_filter: null
+# notice_filter: null
