@@ -62,16 +62,17 @@ servers:
     pass: null
     ssl_params:
       verify: true
-      # ircnet は Let's Encrypt 発行のため ca_cert は不要。接続できない
-      # 場合は OS の CA ストア更新: dnf update ca-certificates
-      # 診断: scripts/fetch-upstream-cert.sh <host> <port>
-      # ca_cert: /path        # 自己署名/私有 CA 上流のみ（scripts 参照）
+      # ircnet は Let's Encrypt 発行。検証失敗時は:
+      #   1) dnf update ca-certificates && update-ca-trust (root)
+      #   2) 直らなければ scripts/fetch-upstream-cert.sh でピンニングし
+      #      ca_cert: config/certs/ircnet-ca.pem を有効化
+      # ca_cert: config/certs/ircnet-ca.pem
   - host: dh.ircnet.ne.jp      # デッドホスト（固定IP: 125.6.255.10）
     port: 6697
     pass: null
     ssl_params:
       verify: true
-      # ca_cert: /path
+      # ca_cert: config/certs/ircnet-ca.pem
 
   # ---- 任意（必要ならコメント解除）----
   # 開発サーバー（SASL-open・海外からでも接続可。予告なく再起動されるため
