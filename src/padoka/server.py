@@ -176,9 +176,15 @@ class PDKServer:
                 self._conn = conn
                 self._logger.slog(
                     "Server connection to %s:%s." % (conn.host, conn.port))
+                self._logger.dlog("  ssl_params=%r" % (conn.ssl_params,))
                 self._pong_received = True
                 try:
                     conn.open()
+                    info = conn.tls_info()
+                    if info:
+                        self._logger.slog("TLS handshake ok (%s)." % info)
+                    else:
+                        self._logger.dlog("plaintext upstream connection.")
                     self._server_main_proc(conn)
                 finally:
                     if self._config.quit_message:
@@ -192,10 +198,28 @@ class PDKServer:
                 self._part_from_all_channels()
                 self._logger.slog("Reconnect request (no server response, or client request).")
                 self._sleep_reconnect()
-            except (ConnectionClosed, OSError, IOError):
+            except ConnectionClosed:
                 self._connected = False
                 self._part_from_all_channels()
-                self._logger.slog("Connection closed by server. Trying to reconnect.")
+                detail = conn.last_error if conn is not None else None
+                if detail:
+                    self._logger.slog(
+                        "Connection closed by server (%s). Trying to reconnect."
+                        % detail)
+                else:
+                    self._logger.slog(
+                        "Connection closed by server before/without any data "
+                        "(no socket error recorded). Trying to reconnect.")
+                self._sleep_reconnect()
+            except (OSError, IOError) as e:
+                self._connected = False
+                detail = (conn.last_error if conn is not None else None) \
+                    or ("%s: %s" % (type(e).__name__, e))
+                host = conn.host if conn is not None else "?"
+                port = conn.port if conn is not None else "?"
+                self._logger.slog(
+                    "Upstream connect to %s:%s failed (%s). Trying to reconnect."
+                    % (host, port, detail))
                 self._sleep_reconnect()
             except E.PDKQuitProgram:
                 break

@@ -33,6 +33,9 @@ class Connection:
     # different threads concurrently.  A short recv timeout bounds the
     # latency an outbound message waits for the next read cycle.
     IO_POLL_TIMEOUT = 0.2
+    # bound TCP connect + TLS handshake so a blackholed route fails over
+    # to the next server quickly instead of hanging for the OS timeout
+    CONNECT_TIMEOUT = 30.0
 
     def __init__(self, host: str, port: int,
                  ssl_params: Optional[dict] = None):
@@ -47,6 +50,19 @@ class Connection:
         self._out_q: "queue.Queue[bytes]" = queue.Queue()
         self._last_send = 0.0
         self._closed = threading.Event()
+        # human-readable reason for the most recent failure (connect / TLS
+        # handshake / read), so callers can log *why* without re-raising
+        self.last_error: Optional[str] = None
+
+    def tls_info(self) -> Optional[str]:
+        """Negotiated TLS version + cipher, or None when not using TLS."""
+        t = self._tls
+        if t is None:
+            return None
+        try:
+            return "%s %s" % (t.version(), t.cipher())
+        except (OSError, ValueError, AttributeError):
+            return "TLS"
 
     @property
     def _io(self) -> Optional[socket.socket]:
@@ -55,22 +71,33 @@ class Connection:
 
     # -- lifecycle ---------------------------------------------------------
     def open(self) -> None:
-        raw = socket.create_connection((self.host, self.port))
-        self._sock = raw
-        if self.ssl_params:
-            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            if self.ssl_params.get("verify") is False:
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-            else:
-                ctx.check_hostname = bool(self.ssl_params.get("check_hostname", True))
-            if self.ssl_params.get("ca_cert"):
-                ctx.load_verify_locations(self.ssl_params["ca_cert"])
-            if self.ssl_params.get("cert_file"):
-                ctx.load_cert_chain(
-                    self.ssl_params["cert_file"],
-                    self.ssl_params.get("key_file"))
-            self._tls = ctx.wrap_socket(raw, server_hostname=self.host)
+        self.last_error = None
+        try:
+            raw = socket.create_connection(
+                (self.host, self.port), timeout=self.CONNECT_TIMEOUT)
+            self._sock = raw
+            if self.ssl_params:
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                if self.ssl_params.get("verify") is False:
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                else:
+                    ctx.check_hostname = bool(self.ssl_params.get("check_hostname", True))
+                if self.ssl_params.get("ca_cert"):
+                    ctx.load_verify_locations(self.ssl_params["ca_cert"])
+                if self.ssl_params.get("cert_file"):
+                    ctx.load_cert_chain(
+                        self.ssl_params["cert_file"],
+                        self.ssl_params.get("key_file"))
+                self._tls = ctx.wrap_socket(raw, server_hostname=self.host)
+        except (OSError, ssl.SSLError) as e:
+            # socket.gaierror (DNS), ECONNREFUSED, TLS handshake/CA errors,
+            # missing ca_cert files, ... -- all land here with the real reason
+            stage = "connect" if self._sock is None else "tls handshake"
+            self.last_error = "failed during %s: %s: %s" % (
+                stage, type(e).__name__, e)
+            self.close()
+            raise
         self._buf = b""
         self._out_q = queue.Queue()
         self._closed.clear()
@@ -100,7 +127,9 @@ class Connection:
                     data = io.recv(4096)
                 except socket.timeout:
                     continue
-                except (OSError, ConnectionResetError):
+                except (OSError, ConnectionResetError) as e:
+                    self.last_error = "read error: %s: %s" % (
+                        type(e).__name__, e)
                     break
                 if not data:
                     break

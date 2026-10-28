@@ -406,5 +406,33 @@ if _lt.is_alive():
     print("  (login thread still alive -> hung on coalesced lines)")
 
 # ---------------------------------------------------------------------------
+section("Connection error reporting (last_error / tls_info)")
+from padoka.irc.connection import Connection  # noqa: E402
+
+# refused port on loopback -> fast OSError, reason must be recorded
+_conn = Connection("127.0.0.1", 1)
+try:
+    _conn.open()
+    _opened = True
+except OSError:
+    _opened = False
+check("open() on refused port raises", _opened is False)
+check("last_error set on connect failure",
+      _conn.last_error is not None and "connect" in _conn.last_error)
+check("tls_info None for plaintext conn", _conn.tls_info() is None)
+_conn.close()
+
+# DNS failure must also be recorded (socket.gaierror is an OSError)
+_conn2 = Connection("nonexistent.invalid", 6697)
+try:
+    _conn2.open()
+    _opened2 = True
+except OSError:
+    _opened2 = False
+check("open() on bad DNS raises", _opened2 is False)
+check("last_error records DNS failure reason",
+      _conn2.last_error is not None and _conn2.last_error != "")
+
+# ---------------------------------------------------------------------------
 print("\n%d passed, %d failed" % (_passed, _failed))
 sys.exit(1 if _failed else 0)
