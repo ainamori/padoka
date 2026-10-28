@@ -100,38 +100,41 @@ servers:
       # check_hostname: false
 ```
 
-#### 自己署名上流への接続（ircnet.ne.jp 等）
+#### 上流 TLS 検証の失敗（`CERTIFICATE_VERIFY_FAILED`）
 
-ircnet 等は公的 CA 発行ではなく自己署名（または私有 CA）証明書を使うため、
-default のままでは `certificate verify failed: unable to get local issuer
- certificate` になります。**`verify: false` にしない**で、上流が提示する
-証明書を `ca_cert` でピンニングします:
+`verify: true` のまま `certificate verify failed` が出た場合は、
+**まず診断スクリプトで原因を判定**してください:
 
 ```bash
-# サーバーが到達できるマシンで実行
-scripts/fetch-upstream-cert.sh dh.ircnet.ne.jp 6697 config/certs/ircnet-ca.pem
+# サーバーが到達できるマシンで実行（診断のみ。ファイルは書出しない）
+scripts/fetch-upstream-cert.sh dh.ircnet.ne.jp 6697
 ```
 
-スクリプトは取得後に **padoka と同じ条件で検証テスト** を実行します:
+スクリプトは提示チェーンの subject / issuer / 指紋を表示し、
+**padoka と同じ条件（SNI + ホスト名検証）で検証テスト**を実行します:
 
-- `検証テスト: 成功` → その PEM だけで接続できます
-- `検証テスト: 失敗 (unable to get local issuer certificate)` →
-  **私有 CA 発行で leaf のみ取得**された状態（openssl CLI が無い環境の
-  python3 フォールバック等）です。CA 証明書が必要なので:
-  1. `dnf install -y openssl`（または `yum install openssl`）してスクリプトを
-     再実行（`-showcerts` でチェーン全体を取得）、または
-  2. openssl のある別マシンで取得した PEM を `config/certs/ircnet-ca.pem` に
-     差し替える
+| 診断結果 | 原因 | 対処 |
+|----------|------|------|
+| issuer に Let's Encrypt 等（公的 CA）+ テスト1 失敗 | **OS の CA ストアが古い**（ISRG Root X2 等が不足） | `dnf update ca-certificates && update-ca-trust`（root）→ 再実行してテスト1 成功を確認。**ca_cert は不要** |
+| issuer == subject（自己署名） | 上流が自己署名証明書 | `scripts/fetch-upstream-cert.sh <host> <port> config/certs/<name>-ca.pem` を実行し、`ca_cert` で指定 |
+| 公的 CA でもない（私有 CA） | 私有 CA の root がストアに無い | 上から取得した PEM（中間+root、leaf 除外）を `ca_cert` で指定 |
 
-自己署名（subject == issuer）なら leaf 単体で固定可能です。
+**やってはいけないこと**:
+
+- `verify: false` — MITM 対策が完全に無効になる（SASL PLAIN を扱う以上不可）
+- **leaf を含むファイルを `ca_cert` に設定** — OpenSSL は信頼ストア内の
+  leaf をチェーン終端のアンカー扱いするため、OS の CA ストアが最新でも
+  検証が**壊れる**（`unable to get local issuer certificate` になる）
+
+自己署名 / 私有 CA での pinning の例:
 
 ```yaml
 servers:
-  - host: dh.ircnet.ne.jp
+  - host: some.example
     port: 6697
     ssl_params:
       verify: true
-      ca_cert: config/certs/ircnet-ca.pem   # ホスト名検証は維持される
+      ca_cert: config/certs/some-ca.pem   # leaf を含まないファイル
 ```
 
 証明書がローテーションされた場合はスクリプトを再実行し、指紋が変わった

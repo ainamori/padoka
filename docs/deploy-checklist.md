@@ -34,12 +34,16 @@ ss -tlnp | grep 6667     # 使用済みなら PADOKA_CLIENT_PORT を変える
 
 ### 接続先の例（ircnet.ne.jp / TLS）
 
-ircnet は公的 CA 発行の証明書を使わないため、**上流証明書のピンニング**
-（`ca_cert`）が必要です（サンプル設定は既に配置済み）:
+ircnet は **Let's Encrypt（YE2 / E2 chain）** 発行の証明書を使うため、
+OS の CA ストアが最新であれば `verify: true` のまま接続できます
+（ca_cert は不要）。接続できない場合は CA ストアの更新が第一の対処です。
 
 ```bash
-# 初回セットアップ / 上流の証明書ローテーション時: 指紋を確認して取得
-scripts/fetch-upstream-cert.sh dh.ircnet.ne.jp 6697 config/certs/ircnet-ca.pem
+# 診断（issuer / 指紋 / 検証テストを表示）
+scripts/fetch-upstream-cert.sh dh.ircnet.ne.jp 6697
+
+# テスト1 が失敗（unable to get local issuer certificate）なら:
+dnf update ca-certificates && update-ca-trust    # root 権限
 ```
 
 ```yaml
@@ -49,13 +53,13 @@ servers:
     pass: null
     ssl_params:
       verify: true
-      ca_cert: config/certs/ircnet-ca.pem
+      # ca_cert: /path      # 自己署名/私有 CA の上流のみ必要（診断スクリプト参照）
   - host: dh.ircnet.ne.jp
     port: 6697
     pass: null
     ssl_params:
       verify: true
-      ca_cert: config/certs/ircnet-ca.pem
+      # ca_cert: /path
 ```
 
 ## 3. 起動
@@ -157,8 +161,8 @@ docker stop padoka             # 正常終了 (SIGTERM)
 | 起動直後に `Restarting` | ポート競合 or 設定エラー。`docker compose logs` を確認 |
 | `Connection closed by server` の繰り返し | nick 衝突 or ACL 拒否。nick 変更 / サーバー ACL を確認 |
 | IRC 接続できない（TLS） | `ssl_params.verify` / 証明書ストア。必要なら CA 指定 |
-| `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` | 上流が自己署名/私有 CA（ircnet の想定挙動）。`scripts/fetch-upstream-cert.sh` で証明書を `config/certs/ircnet-ca.pem` に固定し、`ca_cert` で参照（`verify: false` は非推奨） |
-| 証明書固定しても同じ VERIFY_FAILED が出る | **私有 CA 発行で leaf のみ取得**された状態。スクリプトの「検証テスト」結果を確認: 失敗なら openssl CLI を入れて再実行（チェーン全体取得）か、openssl 環境の別マシンで取得し差し替え |
+| `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` | 公的 CA 発行（ircnet は Let's Encrypt）なら **OS の CA ストアが古い**。`dnf update ca-certificates && update-ca-trust`（root）。自己署名/私有 CA の場合は `scripts/fetch-upstream-cert.sh <host> <port>` で診断し `ca_cert` 固定（leaf を含めないこと） |
+| 証明書固定しても同じ VERIFY_FAILED が出る | **leaf を含むファイルが `ca_cert` にある**可能性が高い（信頼ストア内の leaf は検証を壊す）。padoka.yml の `ca_cert` を外す / leaf を除いたファイルに差し替える |
 | `failed during tls handshake`（上記以外） | SNI/ホスト名不一致 → 指紋確認後に `check_hostname: false` も検討。中間ポートで TLS を剥がれている可能性（プロキシ環境） |
 | クライアントが TLS で接続できない | 証明書指紋の未登録（自己署名）/ `-ssl_verify=off`。ホスト側のポート公開 (`PADOKA_CLIENT_PORT`) / `client_server.acl` も確認 |
 | SASL 認証で 907 が返る | `client_server.pass` とクライアント側の SASL パスワード不一致 |

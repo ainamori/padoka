@@ -39,19 +39,21 @@ client_server:
 # 再接続時にローテーション。 TLS 利用は ssl_params を追加。
 servers:
   - host: irc.ircnet.ne.jp     # メインドメイン（DNS RoundRobin）
-    port: 6697                 # SSL/TLS
+    port: 6697                 # SSL/TLS（Let's Encrypt 発行）
     pass: null
     ssl_params:
       verify: true
-      # ircnet は公的 CA 発行ではないため、提示証明書をピンニングする
-      # （未取得なら: scripts/fetch-upstream-cert.sh で取得、指紋を確認）
-      ca_cert: config/certs/ircnet-ca.pem
+      # ircnet は Let's Encrypt 発行のため ca_cert は不要（むしろ leaf を
+      # 含む ca_cert は検証を壊す）。接続できない場合は OS の CA ストア更新:
+      #   dnf update ca-certificates && update-ca-trust
+      # 診断: scripts/fetch-upstream-cert.sh <host> <port>
+      # ca_cert: /path        # 自己署名/私有 CA 上流のみ（scripts 参照）
   - host: dh.ircnet.ne.jp      # デッドホスト（固定 IP 125.6.255.10）
     port: 6697
     pass: null
     ssl_params:
       verify: true
-      ca_cert: config/certs/ircnet-ca.pem
+      # ca_cert: /path
   # 開発サーバー / IPv6 / 非TLS のオプションは config/padoka.ircnet.yml 参照
   # - host: 127.0.0.1
   #   port: 6667
