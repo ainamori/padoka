@@ -166,6 +166,45 @@ check("log filename has setting", fn.startswith("myset-"))
 check("log filename maps # -> CS-", "CS-test" in fn)
 
 # ---------------------------------------------------------------------------
+section("Config null fallback (hostname / USER line)")
+import tempfile as _tempfile  # noqa: E402
+
+
+class _StubMgr:  # no `state` attr -> PDKLogger.slog skips client fan-out
+    pass
+
+
+def _load_cfg(yaml_text):
+    d = _tempfile.mkdtemp(prefix="pdkcfg_")
+    yf = os.path.join(d, "t.yml")
+    with open(yf, "w", encoding="utf-8") as f:
+        f.write(yaml_text)
+    cfg = Config(_StubMgr(), yf)
+    return cfg
+
+
+# Regression: sample config uses `hostname: null` meaning "use system
+# hostname". A bare `r.get("hostname", default)` returns None when the key
+# exists with a null value, which later crashed USER serialization in
+# message.to_s() (TypeError: expected str, got NoneType).
+_cfg = _load_cfg(
+    "setting_name: cfgtest\nloglevel: 0\nlog_dir: %s\n"
+    "user: myuser\nnick: mynick\n"
+    "hostname: null\nservername: null\nrealname: null\n"
+    "client_server: {}\nservers: []\n" % _tempfile.mkdtemp(prefix="pdklog_"))
+check("hostname: null -> system hostname",
+      _cfg.hostname == os.uname().nodename and _cfg.hostname is not None)
+check("servername: null -> *", _cfg.servername == "*")
+check("realname: null -> default", _cfg.realname == "padoka user")
+check("explicit user kept", _cfg.user == "myuser")
+# the USER line must serialize without raising
+_user_line = Command.user(_cfg.user, _cfg.hostname, _cfg.servername,
+                          _cfg.realname).to_s()
+check("USER line serializes with hostname",
+      _user_line.startswith("USER myuser ") and _cfg.hostname in _user_line)
+check("USER line has no None", "None" not in _user_line)
+
+# ---------------------------------------------------------------------------
 section("safe_calc (arithmetic only, blocks injection)")
 check("2+3*4=14", safe_calc("2+3*4") == 14)
 check("(1+2)*3=9", safe_calc("(1+2)*3") == 9)

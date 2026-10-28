@@ -100,12 +100,16 @@ class Config:
         self.reconnect_delay = int(r.get("reconnect_delay", 150))
 
         # user / nick
+        # Use `or` (not `get(key, default)`) so an explicit `null` / empty
+        # value falls back to the default. The sample config documents
+        # `hostname: null` as "use the system hostname"; a bare .get() would
+        # return None and later crash USER serialization in message.to_s().
         env_user = os.environ.get("USER") or "padoka"
-        self.user = r.get("user", env_user)
-        self.nick = r.get("nick", env_user)
-        self.hostname = r.get("hostname", os.uname().nodename)
-        self.servername = r.get("servername", "*")
-        self.realname = r.get("realname", "padoka user")
+        self.user = r.get("user") or env_user
+        self.nick = r.get("nick") or env_user
+        self.hostname = r.get("hostname") or os.uname().nodename
+        self.servername = r.get("servername") or "*"
+        self.realname = r.get("realname") or "padoka user"
         self.mode = r.get("mode")
         self.away_message = r.get("away_message", "away")
         self.away_nick = r.get("away_nick")
