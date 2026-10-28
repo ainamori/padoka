@@ -204,6 +204,23 @@ check("USER line serializes with hostname",
       _user_line.startswith("USER myuser ") and _cfg.hostname in _user_line)
 check("USER line has no None", "None" not in _user_line)
 
+# regression: --debug (PADOKA_DEBUG) must force loglevel 3 even when the
+# config sets loglevel explicitly (previously the flag was a no-op unless
+# `loglevel` was absent, so debug logging never appeared with sample configs)
+_prev_dbg = os.environ.get("PADOKA_DEBUG")
+os.environ["PADOKA_DEBUG"] = "1"
+try:
+    _cfg_dbg = _load_cfg(
+        "setting_name: cfgdbg\nloglevel: 0\nlog_dir: %s\n"
+        "client_server: {}\nservers: []\n" % _tempfile.mkdtemp(prefix="pdklog_"))
+    check("--debug forces loglevel 3 over explicit config",
+          _cfg_dbg.loglevel == 3)
+finally:
+    if _prev_dbg is None:
+        del os.environ["PADOKA_DEBUG"]
+    else:
+        os.environ["PADOKA_DEBUG"] = _prev_dbg
+
 # ---------------------------------------------------------------------------
 section("safe_calc (arithmetic only, blocks injection)")
 check("2+3*4=14", safe_calc("2+3*4") == 14)

@@ -90,7 +90,10 @@ class Config:
         self.setting_name = r.get("setting_name") or \
             re.sub(r"\.(yml|yaml|rc)$", "", os.path.basename(rcfile))
         self.loglevel = int(r.get("loglevel", 2))
-        if os.environ.get("PADOKA_DEBUG") and "loglevel" not in r:
+        # --debug (PADOKA_DEBUG) always forces debug level, even if the
+        # config sets loglevel explicitly (otherwise the flag silently does
+        # nothing whenever `loglevel:` is present, which is the common case)
+        if os.environ.get("PADOKA_DEBUG"):
             self.loglevel = 3
         self.padoka_server_name = r.get("padoka_server_name", "PadokaProgram")
         self.log_dir = r.get("log_dir", "./log")

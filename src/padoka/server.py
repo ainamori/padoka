@@ -254,10 +254,13 @@ class PDKServer:
             if cmd == "001":
                 break
             if cmd in ("433", "437"):
-                nick = self.state.nick_succ(q.params[1] if len(q.params) > 1 else "")
+                # 433/437: params[0] is the nickname (RFC1459: "433 nick :nick in use")
+                nick = self.state.nick_succ(q.params[0] if q.params else "")
                 self.state.set_nick(nick)
                 conn.send(Command.nick(nick))
             elif cmd == "ERROR":
+                # log the server's reason -- a bare reconnect hides it
+                self._logger.slog("Server sent ERROR during login: %s" % q)
                 raise E.PDKReconnectToServer
             elif cmd in ("NOTICE", "020", "PRIVMSG", "004"):
                 continue
@@ -314,9 +317,12 @@ class PDKServer:
             elif cmd == "332":
                 self.state.on_332(q.params[1], q.params[2] if len(q.params) > 2 else "")
             elif cmd == "403":
-                self.state.on_403(q.params[1])
+                # 403: params[0] is the channel (RFC1459: "403 #chan :No such channel")
+                self.state.on_403(q.params[0] if q.params else "")
             elif cmd in ("433", "436", "437"):
-                p = q.params[1] if len(q.params) > 1 else ""
+                # params[0] is the nick or channel ("433 nick :nickname in use" /
+                # "437 #chan :channel is in use")
+                p = q.params[0] if q.params else ""
                 if re.match(r"^[#&!+]", p):
                     threading.Thread(target=self._delayed_join, args=(p,),
                                      daemon=True).start()
