@@ -43,11 +43,15 @@ servers:
     pass: null
     ssl_params:
       verify: true
+      # ircnet は公的 CA 発行ではないため、提示証明書をピンニングする
+      # （未取得なら: scripts/fetch-upstream-cert.sh で取得、指紋を確認）
+      ca_cert: config/certs/ircnet-ca.pem
   - host: dh.ircnet.ne.jp      # デッドホスト（固定 IP 125.6.255.10）
     port: 6697
     pass: null
     ssl_params:
       verify: true
+      ca_cert: config/certs/ircnet-ca.pem
   # 開発サーバー / IPv6 / 非TLS のオプションは config/padoka.ircnet.yml 参照
   # - host: 127.0.0.1
   #   port: 6667

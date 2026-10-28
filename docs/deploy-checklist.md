@@ -34,6 +34,14 @@ ss -tlnp | grep 6667     # 使用済みなら PADOKA_CLIENT_PORT を変える
 
 ### 接続先の例（ircnet.ne.jp / TLS）
 
+ircnet は公的 CA 発行の証明書を使わないため、**上流証明書のピンニング**
+（`ca_cert`）が必要です（サンプル設定は既に配置済み）:
+
+```bash
+# 初回セットアップ / 上流の証明書ローテーション時: 指紋を確認して取得
+scripts/fetch-upstream-cert.sh dh.ircnet.ne.jp 6697 config/certs/ircnet-ca.pem
+```
+
 ```yaml
 servers:
   - host: irc.ircnet.ne.jp
@@ -41,11 +49,13 @@ servers:
     pass: null
     ssl_params:
       verify: true
+      ca_cert: config/certs/ircnet-ca.pem
   - host: dh.ircnet.ne.jp
     port: 6697
     pass: null
     ssl_params:
       verify: true
+      ca_cert: config/certs/ircnet-ca.pem
 ```
 
 ## 3. 起動
@@ -147,6 +157,8 @@ docker stop padoka             # 正常終了 (SIGTERM)
 | 起動直後に `Restarting` | ポート競合 or 設定エラー。`docker compose logs` を確認 |
 | `Connection closed by server` の繰り返し | nick 衝突 or ACL 拒否。nick 変更 / サーバー ACL を確認 |
 | IRC 接続できない（TLS） | `ssl_params.verify` / 証明書ストア。必要なら CA 指定 |
+| `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` | 上流が自己署名/私有 CA（ircnet の想定挙動）。`scripts/fetch-upstream-cert.sh` で証明書を `config/certs/ircnet-ca.pem` に固定し、`ca_cert` で参照（`verify: false` は非推奨） |
+| `failed during tls handshake`（上記以外） | SNI/ホスト名不一致 → 指紋確認後に `check_hostname: false` も検討。中間ポートで TLS を剥がれている可能性（プロキシ環境） |
 | クライアントが TLS で接続できない | 証明書指紋の未登録（自己署名）/ `-ssl_verify=off`。ホスト側のポート公開 (`PADOKA_CLIENT_PORT`) / `client_server.acl` も確認 |
 | SASL 認証で 907 が返る | `client_server.pass` とクライアント側の SASL パスワード不一致 |
 | ボットが動かない | `bots:` に name が入っているか / プラグインの読み込みエラーをログで確認 |

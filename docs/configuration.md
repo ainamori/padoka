@@ -96,9 +96,33 @@ servers:
     pass: null              # 上流サーバーのサーバーパス（省略可）
     ssl_params:
       verify: true          # 証明書検証
-      # ca_cert: /path      # 独自CA
+      # ca_cert: /path      # 独自CA（自己署名上流のピンニングに使用）
       # check_hostname: false
 ```
+
+#### 自己署名上流への接続（ircnet.ne.jp 等）
+
+ircnet 等は公的 CA 発行ではなく自己署名（または私有 CA）証明書を使うため、
+default のままでは `certificate verify failed: unable to get local issuer
+ certificate` になります。**`verify: false` にしない**で、上流が提示する
+証明書を `ca_cert` でピンニングします:
+
+```bash
+# サーバーが到達できるマシンで実行（指紋を確認して）
+scripts/fetch-upstream-cert.sh dh.ircnet.ne.jp 6697 config/certs/ircnet-ca.pem
+```
+
+```yaml
+servers:
+  - host: dh.ircnet.ne.jp
+    port: 6697
+    ssl_params:
+      verify: true
+      ca_cert: config/certs/ircnet-ca.pem   # ホスト名検証は維持される
+```
+
+証明書がローテーションされた場合はスクリプトを再実行し、指紋が変わった
+ことを確認して差し替えます。
 
 複数指定するとランダム選択し、再接続時にローテーションします。
 
