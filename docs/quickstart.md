@@ -136,6 +136,7 @@ irssi
    | `client_server.pass` | **必ずデフォルト `PadokaPassWord` から変更**（/PASS と SASL PLAIN の両方に使用） |
    | `client_server.acl` | **接続元を制限**（`deny all` + 個別 `allow`） |
    | `client_server.ssl_cert_file` / `ssl_key_file` | 公開ホストで使う場合は **CA 発行証明書へ差し替え**（Docker イメージ内は自己署名） |
+   | `servers[].sasl` | **海外から ircnet に接続する場合必須**。NickServ アカウントの `username` / `password` を設定（[configuration.md「上流 SASL」](configuration.md#上流-saslircv3-plain) 参照） |
    | `channel_info` | 常駐するチャネル |
 
 2. **ログ**: Docker は `docker compose logs -f padoka`、直接実行は
@@ -171,6 +172,7 @@ bots:
 | 目的 | 参照 |
 |------|------|
 | 設定の全項目 | [configuration.md](configuration.md) |
+| **上流 SASL（NickServ / 海外接続）** | [configuration.md「上流 SASL」](configuration.md#上流-saslircv3-plain) |
 | 実 IRC 環境での本番デプロイ | [deploy-checklist.md](deploy-checklist.md) |
 | ボットの自作 | [bot-development.md](bot-development.md) |
 | 内部構造（スレッド/メッセージ流れ） | [architecture.md](architecture.md) |

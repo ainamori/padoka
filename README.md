@@ -57,6 +57,30 @@ irssi
 [docs/deploy-checklist.md](docs/deploy-checklist.md) を参照してください。
 TLS / SASL の設定詳細は [docs/configuration.md](docs/configuration.md) を参照。
 
+### 上流 SASL（NickServ で登録済み nick を使う場合）
+
+上流 IRC ネットワークに SASL 認証で接続したい場合（ircnet では**海外からの
+接続に必須**、登録 nick の使用で推奨）は、`servers[]` に `sasl:` を追加します:
+
+```yaml
+servers:
+  - host: dev.ircnet.ne.jp
+    port: 6697
+    ssl_params:
+      verify: true
+    sasl:
+      username: padoka_py        # NickServ アカウント名
+      password: "<nickservパスワード>"
+```
+
+- NickServ アカウントの登録・パスワード設定手順: **irssi 等で ircnet に接続** →
+  `/msg NickServ register padoka_py <パスワード>`（新規）または
+  `/msg NickServ setpassword <パスワード>`（変更）。
+  `padoka -c config/padoka.yml --debug` のログに `SASL success (username=...)`
+  が出て 001 welcome が来れば成功です。
+- `password` が空だと警告を出して SASL をスキップします（匿名接続になる）。
+- 詳細（ircnet の地理制約を含む）: [docs/configuration.md](docs/configuration.md#上流-saslircv3-plain)
+
 ### ネットワーク構成
 
 デフォルトでは bridge ネットワークで `client_server.port` をホストに公開します。

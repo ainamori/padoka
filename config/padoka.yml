@@ -59,6 +59,11 @@ servers:
   # login 直後に  ERROR :Closing Link: ... (Unauthorized connection)  になる。
   # 海外では本サーバー + SASL が必要。username/password は自分の
   # NickServ 登録情報に差し替えてください（password 空 = SASL スキップ）。
+  #
+  # NickServ の登録 / パスワード設定（ircnet に一度接続して）:
+  #   /msg NickServ register padoka_py <パスワード>   # 新規登録
+  #   /msg NickServ setpass <パスワード>              # 登録済みの変更
+  # 手順の詳細: docs/configuration.md「上流 SASL（ircv3 PLAIN）」
   - host: dev.ircnet.ne.jp
     port: 6697
     pass: null
@@ -66,7 +71,7 @@ servers:
       verify: true
     sasl:
       username: padoka_py
-      password: ""           # <- NickServ パスワードを記入
+      password: ""           # <- NickServ パスワードを記入（コミットしない）
   # IPv6 / 非TLS のオプションは config/padoka.ircnet.yml 参照
   # - host: 127.0.0.1
   #   port: 6667

@@ -107,6 +107,83 @@ servers:
     #   password: nickserv_password
 ```
 
+#### 上流 SASL（ircv3 PLAIN）
+
+上流 IRC ネットワークへの SASL 認証（登録済み nick を使うための
+NickServ 認証）です。**クライアント側の SASL**（irssi → padoka の
+`client_server.sasl` / `client_server.pass`）とは別物です。
+
+**いつ必要か**
+
+- ircnet の**海外からの接続は必須**（irc / dh は日本国内限定、dev は
+  SASL 認証ありでのみ海外から接続可）
+- SASL 必須の上流ネットワークで登録 nick を使う場合
+- 接続元 IP によるニックネーム保護が欲しい場合
+
+**1. NickServ アカウントを用意する**
+
+まだ持っていない場合、irssi 等で上流 IRC に**一度だけ**接続して登録します:
+
+```
+/msg NickServ register padoka_py <あなたのパスワード>
+```
+
+登録済みの nick を使う（またはパスワード変更）場合は:
+
+```
+/msg NickServ setpass <あなたのパスワード>
+```
+
+ircnet への登録手順の詳細は ircnet のヘルプページを参照してください。
+
+**2. `servers[]` に `sasl:` を設定する**
+
+```yaml
+servers:
+  - host: dev.ircnet.ne.jp
+    port: 6697
+    pass: null
+    ssl_params:
+      verify: true
+    sasl:
+      username: padoka_py        # NickServ アカウント名（= 使う nick）
+      password: "nickserv_pass"  # 上記で設定したパスワード
+```
+
+- `username` を省略すると `user:` の値が authcid になります
+  （NickServ アカウント名と一致させるべき）
+- `password` が空の `sasl:` は警告を出して **SASL をスキップ**します
+  （空パスワードで 907 になるのを避けるため）。接続したい場合は必ず記入。
+- サーバー毎に設定できます（irc/dh は SASL 不要、dev は SASL 必要、
+  といった区別が可能です）
+
+**3. 動作の確認**
+
+```
+padoka -c config/padoka.yml --debug
+```
+
+正常ならこの順のログが出ます:
+
+```
+[PDK] SASL PLAIN started (username=padoka_py).
+[PDK] SASL success (username=padoka_py).
+[<S] ... command='001' ...          <- welcome（登録完了）
+```
+
+padoka は NICK/USER を送る**前**に `AUTHENTICATE PLAIN`（ircv3）を行い、
+904 (SASL: success) を確認してから登録します。906/907/908（失敗）や
+ERROR が来たら原因をログに出して再接続します。
+
+**セキュリティ注意**
+
+- `password` は設定ファイルに平文で入るため、ファイル権限を
+  `chmod 600 config/padoka.yml` 程度にすること
+- 設定を git 等のバージョン管理に**コミットしない**こと
+  （`padoka.ircnet.yml` 等のサンプルは password を空欄にして同梱）
+- Docker で設定をボリュームマウントしている場合はホスト側のファイル
+  権限を同様に管理する
+
 #### 上流 TLS 検証の失敗（`CERTIFICATE_VERIFY_FAILED`）
 
 `verify: true` のまま `certificate verify failed` が出た場合は、

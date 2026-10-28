@@ -78,6 +78,15 @@ ERROR :Closing Link: <nick>[unknown@<IP>] (Unauthorized connection)
 padoka は NICK 送信前に `AUTHENTICATE PLAIN` を行い、904 (success) を確認して
 から登録します。
 
+**NickServ アカウントの用意（初回のみ）**: irssi 等で ircnet に一度接続し、
+
+```
+/msg NickServ register <nick> <パスワード>    # 新規登録
+/msg NickServ setpass <パスワード>            # 登録済み nick のパスワード変更
+```
+
+**設定例**:
+
 ```yaml
 servers:
   - host: dev.ircnet.ne.jp     # 開発サーバー（予告なく再起動される）
@@ -86,9 +95,14 @@ servers:
     ssl_params:
       verify: true
     sasl:
-      username: yournick
+      username: yournick       # NickServ アカウント名（= 使う nick）
       password: your_nickserv_password
 ```
+
+パスワードは設定ファイルに平文で入るため `chmod 600 config/padoka.yml`
+相当の管理を行い、**バージョン管理にコミットしない**こと。
+完全な手順・動作ログの確認方法は
+[configuration.md「上流 SASL」](configuration.md#上流-saslircv3-plain) を参照。
 
 - `password` が空のままの `sasl:` ブロックは「SASL をスキップ」の警告を出します
   （空パスワードで 907 になるのを避けるため）。海外接続では必ず記入すること。
