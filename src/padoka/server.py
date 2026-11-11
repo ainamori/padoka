@@ -157,6 +157,22 @@ class PDKServer:
         finally:
             self._exiting = True
             self._stop_webui()
+            # wake a clients thread blocked in accept(): closing the
+            # listener from another thread does NOT interrupt accept() on
+            # Linux, so self-connect (the pending conn is discarded in the
+            # accept loop once _exiting is set) and then close
+            srv = self._client_srv
+            if srv is not None:
+                try:
+                    wake = socket.create_connection(
+                        srv.getsockname()[:2], timeout=1)
+                    wake.close()
+                except OSError:
+                    pass
+                try:
+                    srv.close()
+                except OSError:
+                    pass
             for t in (self._server_thread, self._clients_thread, self._timer_thread):
                 if t and t.is_alive():
                     t.join(timeout=3)
@@ -411,7 +427,15 @@ class PDKServer:
 
     def _recv_from_server(self, conn: Connection) -> IRCMessage:
         while True:
-            q = self._in_q.get()
+            # bounded get so a shutdown (_exiting) is noticed within ~1s even
+            # while idle/connected upstream; raises PDKQuitProgram to unwind
+            # the server thread cleanly instead of waiting for the join.
+            try:
+                q = self._in_q.get(timeout=1.0)
+            except queue.Empty:
+                if self._exiting:
+                    raise E.PDKQuitProgram
+                continue
             if q is None:  # EOF sentinel from reader
                 raise ConnectionClosed("upstream connection closed")
             if isinstance(q, tuple) and q[0] is EVENT:
@@ -571,12 +595,28 @@ class PDKServer:
                 self._leave_away()
 
     # ------------------------------------------------------------- signals
+    def _signal_quit(self) -> None:
+        """SIGINT (Ctrl+C) / SIGTERM: stop the program promptly.
+
+        The main thread (blocked in start() on _ctrl_q) must be woken
+        directly.  Routing the quit through _in_q (invoke_event) would
+        only be seen when the *server* thread happens to be waiting in
+        _recv_from_server -- i.e. while connected.  During a failed
+        connect (no upstream) or the reconnect_delay sleep the server
+        thread never drains _in_q, so Ctrl+C would appear dead for up
+        to reconnect_delay seconds (plus any connect hang).
+        Setting _exiting also lets _sleep_reconnect / _recv_from_server
+        unwind within ~1s.
+        """
+        self._exiting = True
+        self._ctrl_q.put("quit")
+
     def _set_signal_traps(self) -> None:
         if threading.current_thread() is not threading.main_thread():
             return
         try:
-            signal.signal(signal.SIGINT, lambda *a: self.invoke_event("quit_program"))
-            signal.signal(signal.SIGTERM, lambda *a: self.invoke_event("quit_program"))
+            signal.signal(signal.SIGINT, lambda *a: self._signal_quit())
+            signal.signal(signal.SIGTERM, lambda *a: self._signal_quit())
             if hasattr(signal, "SIGHUP"):
                 signal.signal(signal.SIGHUP,
                               lambda *a: self.invoke_event("reload_config"))

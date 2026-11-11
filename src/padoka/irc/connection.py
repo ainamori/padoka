@@ -53,8 +53,14 @@ class Connection:
         self._closed = threading.Event()
 
     # -- lifecycle ---------------------------------------------------------
+    CONNECT_TIMEOUT = 30  # seconds; bounds blackholed upstream connects
+
     def open(self) -> None:
-        raw = socket.create_connection((self.host, self.port))
+        # A timeout so an unreachable upstream (dropped SYNs) cannot block
+        # the server thread for minutes; raises OSError -> clean reconnect.
+        raw = socket.create_connection((self.host, self.port),
+                                       timeout=self.CONNECT_TIMEOUT)
+        raw.settimeout(None)  # reader loop wants blocking I/O
         self._sock = raw
         if self.ssl_params:
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
