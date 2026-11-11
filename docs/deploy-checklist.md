@@ -207,7 +207,7 @@ docker stop padoka             # 正常終了 (SIGTERM)
 | 症状 | 原因 / 対処 |
 |------|-----------|
 | 起動直後に `Restarting` | ポート競合 or 設定エラー。`docker compose logs` を確認 |
-| `Connection closed by server` の繰り返し | nick 衝突 or ACL 拒否。nick 変更 / サーバー ACL を確認 |
+| `Connection closed by server` の繰り返し | 最新版ではログに `Last line from server:` が付く（`ERROR :Closing Link: ...` = サーバーが理由付きで拒否、`<none>` = 無言切断、`TLS failed for ...` = ハンドシェイク失敗）。段階切り分けに `python3 scripts/diag_upstream.py -c config/padoka.yml`（TCP→TLS→SASL→登録を各段階の生レスポンス付きで実行） |
 | login 直後に `ERROR :Closing Link: ... (Unauthorized connection)` | **ircnet の一般接続（irc/dh）は日本国内限定**。海外（GCP 等）から接続して発生。dev サーバー + `sasl:`（NickServ 認証）へ切替（「上流 SASL と地理制約」参照） |
 | IRC 接続できない（TLS） | `ssl_params.verify` / 証明書ストア。必要なら CA 指定 |
 | `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` | まず**最新の padoka を使っているか**（旧版は TLS コンテキストがシステム CA ストアを読まず、公的 CA 上流でも必ず発生した。修正済み）。それでも出るなら OS の CA ストアが古い可能性 → `dnf update ca-certificates && update-ca-trust`（root）。自己署名/私有 CA の場合は `scripts/fetch-upstream-cert.sh <host> <port>` で診断し `ca_cert` 固定（leaf を含めないこと） |
@@ -218,6 +218,7 @@ docker stop padoka             # 正常終了 (SIGTERM)
 | （上流側）`SASL failed` / 907 がログに出る | `servers[].sasl.password` が NickServ パスワードと不一致、または空（空なら「SASL configured but no password」の警告が出て SASL をスキップ）。正しい NickServ 認証情報を入力 |
 | ボットが動かない | `bots:` に name が入っているか / プラグインの読み込みエラーをログで確認 |
 | ログが出ない | `loglevel` が低すぎる（デバッグは 3）。`log/` のボリュームも確認 |
+| ログが乏しく原因が見えない | `padoka -c config/padoka.yml --debug` で起動すると loglevel 3 が強制され、上流からのログイン中の生応答（`[login] ...`）や TLS 状態（`TLS handshake ok (...)`）が見える（`--debug` は設定の `loglevel:` より優先） |
 
 ## 8. 本番運用の注意点
 

@@ -51,6 +51,10 @@ class Connection:
         self._flood_chars = 0
         self._flood_lines = 0
         self._closed = threading.Event()
+        # diagnostics: what happened last (read by the server thread when the
+        # connection drops, so the reason shows up in the log)
+        self.last_error: Optional[str] = None
+        self.last_line: Optional[str] = None
 
     # -- lifecycle ---------------------------------------------------------
     CONNECT_TIMEOUT = 30  # seconds; bounds blackholed upstream connects
@@ -93,8 +97,8 @@ class Connection:
                 while b"\n" in self._buf:
                     line, self._buf = self._buf.split(b"\n", 1)
                     self._handle_line(line)
-        except (OSError, ConnectionResetError):
-            pass
+        except (OSError, ConnectionResetError) as e:
+            self.last_error = "%s: %s" % (type(e).__name__, e)
         finally:
             self.queue.put(None)  # EOF sentinel
             self._closed.set()
@@ -109,6 +113,7 @@ class Connection:
     def _handle_line(self, line: bytes) -> None:
         try:
             text = line.decode("utf-8", errors="replace")
+            self.last_line = text
             self.queue.put(IRCMessage.parse(text))
         except ValueError:
             pass  # skip malformed lines
@@ -126,6 +131,22 @@ class Connection:
     @property
     def closed(self) -> bool:
         return self._closed.is_set()
+
+    def tls_info(self) -> Optional[str]:
+        """Human-readable TLS state of this connection, or None if plaintext."""
+        if self._tls is None:
+            return None
+        try:
+            ver = self._tls.version()
+        except Exception:
+            ver = "?"
+        try:
+            cert = self._tls.getpeercert()
+        except Exception:
+            cert = {}
+        if cert:
+            return "TLS %s, cert expires %s" % (ver, cert.get("notAfter", "?"))
+        return "TLS %s (unverified)" % ver
 
     # -- sending -----------------------------------------------------------
     def _flood_throttle(self, msg: IRCMessage, nbytes: int) -> None:

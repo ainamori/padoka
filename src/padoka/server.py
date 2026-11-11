@@ -225,9 +225,15 @@ class PDKServer:
                 self._conn = conn
                 self._logger.slog(
                     "Server connection to %s:%s." % (conn.host, conn.port))
+                self._logger.dlog("  ssl_params=%r" % (conn.ssl_params,))
                 self._pong_received = True
                 try:
                     conn.open()
+                    info = conn.tls_info()
+                    if info:
+                        self._logger.slog("TLS handshake ok (%s)." % info)
+                    else:
+                        self._logger.dlog("plaintext upstream connection.")
                     self._server_main_proc(conn)
                 finally:
                     if self._config.quit_message:
@@ -241,10 +247,39 @@ class PDKServer:
                 self._part_from_all_channels()
                 self._logger.slog("Reconnect request (no server response, or client request).")
                 self._sleep_reconnect()
-            except (ConnectionClosed, OSError, IOError):
+            except ssl.SSLError as e:
+                # TLS handshake / mid-connection alert failure (SSLError is
+                # an OSError, so this must come before the generic handler)
                 self._connected = False
                 self._part_from_all_channels()
-                self._logger.slog("Connection closed by server. Trying to reconnect.")
+                h = conn.host if conn is not None else "?"
+                p = conn.port if conn is not None else "?"
+                self._logger.slog(
+                    "TLS failed for %s:%s (%s: %s). Trying to reconnect."
+                    % (h, p, type(e).__name__, e))
+                self._sleep_reconnect()
+            except ConnectionClosed:
+                self._connected = False
+                self._part_from_all_channels()
+                detail = conn.last_error if conn is not None else None
+                last = conn.last_line if conn is not None else None
+                if detail:
+                    self._logger.slog(
+                        "Connection error (%s). Last line from server: %s. "
+                        "Trying to reconnect." % (detail, last or "<none>"))
+                else:
+                    self._logger.slog(
+                        "Connection closed by server. Last line from server: "
+                        "%s. Trying to reconnect." % (last or "<none>"))
+                self._sleep_reconnect()
+            except (OSError, IOError) as e:
+                self._connected = False
+                self._part_from_all_channels()
+                h = conn.host if conn is not None else "?"
+                p = conn.port if conn is not None else "?"
+                self._logger.slog(
+                    "Upstream connect to %s:%s failed (%s: %s). "
+                    "Trying to reconnect." % (h, p, type(e).__name__, e))
                 self._sleep_reconnect()
             except E.PDKQuitProgram:
                 break
@@ -305,6 +340,7 @@ class PDKServer:
         while True:
             q = self._recv_from_server(conn)
             cmd = q.command
+            self._logger.dlog("[login] %s" % q)
             if not sasl_done:
                 p0 = q.params[0] if q.params else ""
                 if cmd == "AUTHENTICATE" and p0 == "+":
@@ -323,7 +359,8 @@ class PDKServer:
                     self._register(conn)
                     continue
                 if cmd in ("906", "907", "908"):
-                    self._logger.slog("SASL failed: %s" % q)
+                    self._logger.slog(
+                        "SASL failed (username=%s): %s" % (sasl_user, q))
                     raise E.PDKReconnectToServer
                 if cmd == "ERROR":
                     self._logger.slog("Server sent ERROR during login: %s" % q)
@@ -333,10 +370,13 @@ class PDKServer:
             if cmd == "001":
                 break
             if cmd in ("433", "437"):
-                nick = self.state.nick_succ(q.params[1] if len(q.params) > 1 else "")
+                # 433/437: params[0] is the target nick ("433 nick :in use")
+                nick = self.state.nick_succ(q.params[0] if q.params else "")
                 self.state.set_nick(nick)
                 conn.send(Command.nick(nick))
             elif cmd == "ERROR":
+                # log the server's reason -- a bare reconnect hides it
+                self._logger.slog("Server sent ERROR during login: %s" % q)
                 raise E.PDKReconnectToServer
             elif cmd == "002":
                 # RPL_YOURHOST — capture the server-assigned host for bans
