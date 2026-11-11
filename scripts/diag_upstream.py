@@ -20,6 +20,7 @@
 
 import argparse
 import base64
+import select
 import socket
 import ssl
 import subprocess
@@ -46,6 +47,9 @@ def main() -> int:
                    help="force plaintext")
     ap.add_argument("--timeout", type=float, default=15.0,
                     help="connect timeout seconds (default 15)")
+    ap.add_argument("--sasl-wait", type=float, default=30.0,
+                    help="seconds to wait for the 905 SASL continuation "
+                         "prompt after AUTHENTICATE PLAIN (default 30)")
     args = ap.parse_args()
 
     # --- resolve parameters ------------------------------------------------
@@ -159,24 +163,56 @@ def main() -> int:
         print("2) TLS  : SKIP  plaintext")
 
     # --- helpers -----------------------------------------------------------
-    f = tls.makefile("rb")
+    _rb = [b""]  # receive buffer (select-driven; makefile().peek() would
+                 # block on the raw socket and break the bounded wait)
+
+    def read_bounded(timeout: float):
+        """Read one line within timeout seconds.
+
+        Returns the line (str), None on timeout, or "" if the
+        connection was closed.
+        """
+        end = time.time() + max(0.0, timeout)
+        while b"\n" not in _rb[0]:
+            remaining = end - time.time()
+            if remaining <= 0:
+                return None
+            try:
+                r, _, _ = select.select([tls], [], [], min(remaining, 1.0))
+            except OSError:
+                return ""
+            if not r:
+                continue
+            try:
+                data = tls.recv(4096)
+            except ssl.SSLWantReadError:
+                continue
+            except (OSError, TimeoutError):
+                return ""
+            if not data:
+                return ""
+            _rb[0] += data
+        line, _rb[0] = _rb[0].split(b"\n", 1)
+        return line.decode("utf-8", "replace").strip()
+
+    def cmd_of(line: str) -> str:
+        """IRC command of a line, tolerant of a :server prefix."""
+        parts = line.split(None, 2)
+        if line.startswith(":") and len(parts) >= 2:
+            return parts[1].upper()
+        return (parts[0] if parts else "").upper()
 
     def rd(n: int = 3, wait: float = 5.0, stop_when=None):
         """read up to n lines; stop early on EOF/close or stop_when(line)."""
         out = []
         end = time.time() + wait
         while len(out) < n and time.time() < end:
-            try:
-                line = f.readline()
-            except (OSError, TimeoutError) as e:
-                t = "<closed: %s>" % type(e).__name__
-                out.append(t)
-                print("     R| %s" % t)
-                break
-            if not line:
+            t = read_bounded(max(0.2, end - time.time()))
+            if t is None:
+                continue
+            if t == "":
                 out.append("<EOF: connection closed>")
                 break
-            t = line.decode("utf-8", "replace").strip()
             out.append(t)
             print("     R| %s" % t[:200])
             if stop_when and stop_when(t):
@@ -192,31 +228,83 @@ def main() -> int:
 
     # --- 3) SASL ------------------------------------------------------------
     sasl_ok = False
+    sasl_state = "off"  # off | waiting905 | sent | ok | fail | stall | closed
     if sasl_on:
         if not password:
             print("3) SASL : SKIP  sasl ブロックはあるが password が空")
         else:
-            print("3) SASL : AUTHENTICATE PLAIN (user=%s)" % user)
-            sd("AUTHENTICATE PLAIN")
-            # expect continuation prompt: "905 :SASL: +" (or AUTHENTICATE +)
-            rd(n=3, wait=6,
-               stop_when=lambda t: "905" in t or t.startswith("AUTHENTICATE"))
             tok = base64.b64encode(
                 b"\x00" + str(user).encode() + b"\x00"
                 + str(password).encode()).decode()
-            sd("AUTHENTICATE " + tok)
-            r = rd(n=4, wait=6,
-                   stop_when=lambda t: any(x in t for x in ("904", "907",
-                                                            "908", "<EOF",
-                                                            "<closed")))
-            sasl_ok = any(" 904 " in " " + t for t in r)
-            if sasl_ok:
-                print("   -> OK (904)")
-            elif any(" 907 " in " " + t for t in r):
-                print("   -> FAIL (907) username/password 不一致、"
-                      "またはサーバーが SASL を拒否")
-            elif any(" 908 " in " " + t for t in r):
-                print("   -> FAIL (908) サーバーが PLAIN をサポートしていない")
+            t0 = time.time()
+
+            def ts():
+                return "[%5.1fs]" % (time.time() - t0)
+
+            print("3) SASL : AUTHENTICATE PLAIN (user=%s)" % user)
+            sd("AUTHENTICATE PLAIN")
+            sasl_state = "waiting905"
+            # Wait ONLY for the 905 continuation prompt (or an immediate
+            # 904/907/908/ERROR).  Never send the token unprompted -- doing
+            # so aborts the server's connection processing.
+            end = time.time() + args.sasl_wait
+            while sasl_state == "waiting905" and time.time() < end:
+                t = read_bounded(min(2.0, end - time.time()))
+                if t is None:
+                    continue
+                if t == "":
+                    print("     %s R| <EOF: connection closed by server>" % ts())
+                    sasl_state = "closed"
+                    break
+                print("     %s R| %s" % (ts(), t[:200]))
+                c = cmd_of(t)
+                if c == "905":
+                    sasl_state = "sent"
+                elif c == "AUTHENTICATE":  # some servers: "AUTHENTICATE +"
+                    sasl_state = "sent"
+                elif c == "904":
+                    sasl_state = "ok"
+                    sasl_ok = True
+                elif c in ("906", "907", "908"):
+                    sasl_state = "fail"
+                elif c == "ERROR":
+                    sasl_state = "closed"
+            if sasl_state == "waiting905":
+                sasl_state = "stall"
+            if sasl_state == "sent":
+                sd("AUTHENTICATE " + tok)
+                r = rd(n=4, wait=8,
+                       stop_when=lambda t: cmd_of(t) in ("904", "906",
+                                                          "907", "908",
+                                                          "ERROR")
+                       or t.startswith("<EOF")
+                       or t.startswith("<closed"))
+                if any(cmd_of(t) == "904" for t in r):
+                    sasl_state = "ok"
+                    sasl_ok = True
+                elif any(cmd_of(t) == "907" for t in r):
+                    sasl_state = "fail"
+            # --- report -------------------------------------------------
+            if sasl_state == "ok":
+                print("   -> OK (904)  SASL 認証成功")
+            elif sasl_state == "fail":
+                print("   -> FAIL (906/907/908)  認証情報不一致 or PLAIN 非対応")
+            elif sasl_state == "stall":
+                print("   -> STALL: サーバーが 905 (SASL 継続プロンプト) を "
+                      "%ds 間送らず。" % int(args.sasl_wait))
+                print("      受信したのは ircnet 固有の 020 "
+                      "'Please wait while we process your connection' だけ。")
+                print("      => サーバー側の『接続処理』が SASL 進捗前に完了していない。")
+                print("      次に行うこと:")
+                print("        1) --sasl-wait 60 で待ち時間を伸ばして再試行")
+                print("           （905 が遅れて来るだけなら接続が成立する）")
+                print("        2) それでも STALL なら、この IP (GCP 等) に対する")
+                print("           サーバー側処理 (rDNS 検証等) が失敗している可能性。")
+                print("           別環境(日本国内)から同じ資格情報で試す。")
+            elif sasl_state == "closed":
+                print("   -> FAIL: SASL 処理中にサーバーが接続を切断。")
+            else:
+                print("   -> state=%s" % sasl_state)
     else:
         print("3) SASL : SKIP")
 

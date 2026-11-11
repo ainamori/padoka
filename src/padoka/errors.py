@@ -29,6 +29,11 @@ class PDKReconnectToServer(PDKError):
     """Raised to force a reconnect to the IRC server."""
 
 
+class PDKWaitTimeout(PDKError):
+    """Raised when no expected server reply arrives within a deadline
+    (currently used for the upstream SASL exchange)."""""
+
+
 class PDKInvalidMessage(PDKError):
     """A message that cannot be forwarded (contains CR/LF)."""
 

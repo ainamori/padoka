@@ -41,6 +41,11 @@ __all__ = ["PDKServer", "PrefixObject", "sasl_plain_payload"]
 
 TIMER_INTERVAL_SEC = 60
 MAX_PONG_FAIL = 5
+# Max time to wait for the upstream SASL exchange (905 prompt / 904 success).
+# Some servers (e.g. ircnet dev) hold the connection in "processing" (020
+# "Please wait...") for a while; a fully silent server must not hang us
+# forever.
+SASL_TIMEOUT = 60
 
 
 def sasl_plain_payload(username: str, password: str) -> str:
@@ -87,6 +92,7 @@ class PDKServer:
         self._conn: Optional[Connection] = None
         self._server_pass: Optional[str] = None
         self._server_sasl: Optional[dict] = None
+        self._wait_deadline: Optional[float] = None
         self._client_srv: Optional[socket.socket] = None
         self._server_thread: Optional[threading.Thread] = None
         self._clients_thread: Optional[threading.Thread] = None
@@ -247,6 +253,16 @@ class PDKServer:
                 self._part_from_all_channels()
                 self._logger.slog("Reconnect request (no server response, or client request).")
                 self._sleep_reconnect()
+            except E.PDKWaitTimeout:
+                self._connected = False
+                self._part_from_all_channels()
+                self._wait_deadline = None
+                last = conn.last_line if conn is not None else None
+                self._logger.slog(
+                    "SASL: no server reply (905/904) within %d seconds "
+                    "(last line: %s). Trying to reconnect."
+                    % (SASL_TIMEOUT, last or "<none>"))
+                self._sleep_reconnect()
             except ssl.SSLError as e:
                 # TLS handshake / mid-connection alert failure (SSLError is
                 # an OSError, so this must come before the generic handler)
@@ -332,6 +348,7 @@ class PDKServer:
             self._sasl_payload = sasl_plain_payload(sasl_user, password)
             conn.send(Command.authenticate("PLAIN"))
             self._logger.slog("SASL PLAIN started (username=%s)." % sasl_user)
+            self._wait_deadline = time.time() + SASL_TIMEOUT
 
         if not sasl:
             self._register(conn)
@@ -355,6 +372,7 @@ class PDKServer:
                     continue
                 if cmd == "904":
                     sasl_done = True
+                    self._wait_deadline = None
                     self._logger.slog("SASL success (username=%s)." % sasl_user)
                     self._register(conn)
                     continue
@@ -475,6 +493,9 @@ class PDKServer:
             except queue.Empty:
                 if self._exiting:
                     raise E.PDKQuitProgram
+                dl = self._wait_deadline
+                if dl is not None and time.time() > dl:
+                    raise E.PDKWaitTimeout()
                 continue
             if q is None:  # EOF sentinel from reader
                 raise ConnectionClosed("upstream connection closed")
