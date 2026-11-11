@@ -294,13 +294,19 @@ def main() -> int:
                       "%ds 間送らず。" % int(args.sasl_wait))
                 print("      受信したのは ircnet 固有の 020 "
                       "'Please wait while we process your connection' だけ。")
-                print("      => サーバー側の『接続処理』が SASL 進捗前に完了していない。")
+                print("      => サーバー側の『接続処理』が SASL 進捗前に完了していない")
+                print("         （クライアント側の TCP/TLS/DNS は上記で正常なら除外できる）。")
                 print("      次に行うこと:")
-                print("        1) --sasl-wait 60 で待ち時間を伸ばして再試行")
-                print("           （905 が遅れて来るだけなら接続が成立する）")
-                print("        2) それでも STALL なら、この IP (GCP 等) に対する")
-                print("           サーバー側処理 (rDNS 検証等) が失敗している可能性。")
-                print("           別環境(日本国内)から同じ資格情報で試す。")
+                print("        1) 時間をおいて再試行。dev は開発サーバーのため")
+                print("           予告なく再起動され、処理が詰まった状態でも")
+                print("           復旧する可能性がある。")
+                print("        2) 日本国内の接続経路から同じ資格情報で試し、")
+                print("           アカウント/パスワード自体が正常か確認する。")
+                print("           （国内でつながらなければ資格情報が原因）")
+                print("        3) それでも海外のみ STALL するなら、本出力")
+                print("           (020 後の 905 不在) を添えて ircnet 管理者に")
+                print("           連絡する。SASL-open なのに 905 が来ないのは")
+                print("           サーバー側の不具合として特定できる症状。")
             elif sasl_state == "closed":
                 print("   -> FAIL: SASL 処理中にサーバーが接続を切断。")
             else:
@@ -332,6 +338,11 @@ def main() -> int:
     err = [t for t in r if t.startswith("ERROR")]
     if err:
         print("   -> FAIL サーバーが ERROR を返して切断: %s" % err[0])
+        if "Unauthorized connection" in err[0]:
+            print("      '(Unauthorized connection)' は ircnet が SASL 未認証の")
+            print("      海外接続を拒否した標準メッセージ。SASL が 904 に到達し")
+            print("      なかったこと (= 上記 3) が STALL/closed) の必然的な帰結。")
+            print("      原因はここではなく 3) の SASL 段階。")
     elif "<EOF: connection closed>" in r:
         if sasl_on and not sasl_ok:
             print("   -> FAIL SASL 未取得のまま登録して切断された")
