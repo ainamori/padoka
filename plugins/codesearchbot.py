@@ -35,9 +35,12 @@ class CodeSearchBot(PDKBot):
         m = re.match(r"\Acodesearch(\:([a-z]+))?>\s*(.+)", msg)
         if not m or not self._available_channel.search(ch):
             return
+        self.run_async(self._do_result, ch, m.group(2), m.group(3))
+
+    def _do_result(self, ch, engine, word):
         self.send_notice(ch, "codesearch%s bot: %s" % (
-            ("#%s" % m.group(2)) if m.group(2) else "",
-            self.result(m.group(2), m.group(3))))
+            ("#%s" % engine) if engine else "",
+            self.result(engine, word)))
 
     def result(self, engine, key):
         engine = (engine or "debian").lower()

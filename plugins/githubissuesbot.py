@@ -115,7 +115,7 @@ class GithubIssuesBot(PDKBot):
     def check(self):
         tm = datetime.now()
         if tm.timestamp() - self._tm * 60 > self._prevtm.timestamp():
-            self.make_notice(tm)
+            self.run_async(self.make_notice, tm)
 
     def make_notice(self, tm):
         since = self._prevtm

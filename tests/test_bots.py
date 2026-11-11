@@ -17,6 +17,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "src"))
@@ -149,17 +150,35 @@ gb._captured.clear()
 gb._cse = lambda word, num=1: (
     {"searchInformation": {"totalResults": "42"},
      "items": [{"title": "T", "link": "L"}]}, None)
-gb.on_privmsg(Prefix("u"), "#t", "g> hello")
+# search is dispatched on a worker thread; call the worker directly for a
+# deterministic assertion (HTTP mocked).
+gb._do_search("#t", "hello")
 check("search routed (42 + title)", any("42" in m and "T" in m for m in gb._captured))
 
 gb._captured.clear()
 gb._count = lambda word: "7"
-gb.on_privmsg(Prefix("u"), "#t", "googlec> a b")
+gb._do_counts("#t", ["a", "b"])
 check("googlec routed (both words)", any("a: 7" in m and "b: 7" in m for m in gb._captured))
 
 gb._captured.clear()
 gb.on_privmsg(Prefix("u"), "#t", "g:calc> 1/0")
 check("calc div0 handled", any("division by zero" in m for m in gb._captured))
+
+# run_async: a slow HTTP fetch must not block on_privmsg (so the server / timer
+# thread that dispatches it keeps responding, e.g. to PING).  The result is
+# delivered later on the worker thread.
+gb3 = make(GoogleBot, {"api_key": "k", "cx": "c"})
+def _slow_cse(word, num=1):
+    time.sleep(0.3)
+    return ({"searchInformation": {"totalResults": "1"},
+             "items": [{"title": "SLOW", "link": "L"}]}, None)
+gb3._cse = _slow_cse
+t0 = time.time()
+gb3.on_privmsg(Prefix("u"), "#t", "g> slow")
+check("on_privmsg returns before HTTP completes (async)", time.time() - t0 < 0.2)
+time.sleep(0.5)
+check("async result delivered on worker thread",
+      any("SLOW" in m for m in gb3._captured))
 
 # ---------------------------------------------------------------------------
 section("XiBot dice (format only)")

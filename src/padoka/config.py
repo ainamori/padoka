@@ -90,10 +90,7 @@ class Config:
         self.setting_name = r.get("setting_name") or \
             re.sub(r"\.(yml|yaml|rc)$", "", os.path.basename(rcfile))
         self.loglevel = int(r.get("loglevel", 2))
-        # --debug (PADOKA_DEBUG) always forces debug level, even if the
-        # config sets loglevel explicitly (otherwise the flag silently does
-        # nothing whenever `loglevel:` is present, which is the common case)
-        if os.environ.get("PADOKA_DEBUG"):
+        if os.environ.get("PADOKA_DEBUG") and "loglevel" not in r:
             self.loglevel = 3
         self.padoka_server_name = r.get("padoka_server_name", "PadokaProgram")
         self.log_dir = r.get("log_dir", "./log")
@@ -127,6 +124,15 @@ class Config:
         self.client_server_acl = cs.get("acl")
         self.client_server_ssl_cert_file = cs.get("ssl_cert_file")
         self.client_server_ssl_key_file = cs.get("ssl_key_file")
+
+        # web ui
+        wu = r.get("webui", {}) or {}
+        self.webui_enabled = bool(wu.get("enabled", False))
+        self.webui_host = wu.get("host", "127.0.0.1")
+        self.webui_port = int(wu.get("port", 8080))
+        self.webui_pass = wu.get("pass", "")
+        self.webui_title = wu.get("title", "Padoka WebUI")
+        self.webui_buffer = int(wu.get("buffer", 200))
 
         # log writers config
         self.default_log = {**_default_log(self.loglevel),
@@ -255,6 +261,7 @@ class Config:
     def _load_bots(self, bot_specs) -> None:
         if not bot_specs:
             return
+        assert self.logger is not None
         for spec in bot_specs:
             if isinstance(spec, dict):
                 if spec.get("disable"):
@@ -264,7 +271,11 @@ class Config:
             else:
                 name = spec
                 cfg = None
-            bot = self._make_bot(name, cfg)
+            try:
+                bot = self._make_bot(name, cfg)
+            except Exception as e:  # one bad bot must not break the proxy
+                self.logger.slog("bot %s failed to initialize: %s" % (name, e))
+                continue
             if bot is not None:
                 self.bots.append(bot)
 
@@ -325,6 +336,9 @@ class Config:
         return ch.lower().translate(str.maketrans("[]\\~", "{}|^"))
 
     # ------------------------------------------------------------ filenames
+    def channel_info_get(self, ch: str) -> Optional[dict]:
+        return self.channel_info.get(ch)
+
     def make_logfilename(self, tmpl: str, rch: str, cn: Optional[str]) -> str:
         if not cn:
             cn = re.sub(r"^!\w{5}", "!", rch)

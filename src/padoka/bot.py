@@ -36,6 +36,7 @@ Available handlers:
 from __future__ import annotations
 
 import re
+import threading
 from typing import Optional
 
 from .irc.message import Command
@@ -117,6 +118,25 @@ class PDKBot:
 
     def send_msg(self, msg) -> None:
         self.manager.send_to_server(msg)
+
+    # -- async helper ------------------------------------------------------
+    def run_async(self, fn, *args, **kwargs) -> None:
+        """Run ``fn(*args)`` on a daemon thread.
+
+        Use for slow work (e.g. HTTP fetch) inside ``on_privmsg`` / ``on_timer``
+        so it does not block the server or timer thread that dispatched the
+        event (which would delay PONG replies and can trip the watchdog).
+        Exceptions are logged rather than raised into the caller thread.
+        """
+        def _wrap():
+            try:
+                fn(*args, **kwargs)
+            except Exception as e:  # noqa: BLE001 - logged, not raised
+                try:
+                    self.logger.slog("%s: async error: %s" % (type(self).__name__, e))
+                except Exception:
+                    pass
+        threading.Thread(target=_wrap, daemon=True).start()
 
     # -- alias -------------------------------------------------------------
     def ccn(self, ch) -> str:

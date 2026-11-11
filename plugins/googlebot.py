@@ -96,7 +96,7 @@ class GoogleBot(PDKBot):
         # search: g> / google>
         m = re.match(r"^\s*g(?:oogle)?\s*>\s*(.+)$", msg)
         if m:
-            self.send_notice(ch, "google bot: %s" % self._search(m.group(1).strip()))
+            self.run_async(self._do_search, ch, m.group(1).strip())
             return
         # counts: googlec>
         m = re.match(r"^\s*googlec\s*>\s*(.+)$", msg)
@@ -104,8 +104,14 @@ class GoogleBot(PDKBot):
             words = m.group(1).split()[:self._googlec_maxwords]
             if not words:
                 return
-            parts = ["%s: %s" % (w, self._count(w)) for w in words]
-            self.send_notice(ch, "googlec bot: %s" % ", ".join(parts))
+            self.run_async(self._do_counts, ch, words)
+
+    def _do_search(self, ch, word):
+        self.send_notice(ch, "google bot: %s" % self._search(word))
+
+    def _do_counts(self, ch, words):
+        parts = ["%s: %s" % (w, self._count(w)) for w in words]
+        self.send_notice(ch, "googlec bot: %s" % ", ".join(parts))
 
     def _cse(self, word, num=1):
         if not (self._api_key and self._cx):

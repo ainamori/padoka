@@ -25,6 +25,10 @@ class ChannelState:
         self.name = name
         self.topic: Optional[str] = None
         self.member: Dict[str, str] = {}  # nick -> mode string
+        # Channel key (MODE k) and ban masks (MODE b), tracked live so the
+        # proxy can re-join with the current key and defend against self-bans.
+        self.key: Optional[str] = None
+        self.bans: List[str] = []
 
     # -- accessors ---------------------------------------------------------
     def members(self) -> List[str]:
@@ -35,7 +39,7 @@ class ChannelState:
 
     def names(self) -> List[str]:
         out = []
-        for nick, mode in self.member.items():
+        for nick, mode in list(self.member.items()):
             if "o" in (mode or ""):
                 p = "@"
             elif "v" in (mode or ""):
@@ -69,8 +73,15 @@ class ChannelState:
     def on_kick(self, nick: str) -> None:
         self.member.pop(nick, None)
 
-    def on_mode(self, nick: str, args: List[str]) -> None:
+    def on_mode(self, nick: str, args: List[str]) -> List[str]:
+        """Apply channel-mode changes.
+
+        Tracks the channel key (``k``) and ban masks (``b``) in addition to
+        member op/voice flags.  Returns the list of ban masks that were
+        *added* via ``+b`` so the caller can run ban self-defense.
+        """
         args = list(args)
+        added_bans: List[str] = []
         while args:
             mode = args.pop(0)
             flag = mode[0]
@@ -80,9 +91,22 @@ class ChannelState:
                     if target is not None:
                         self._chg_mode(target, flag, m)
                 elif m in self.MODE_WITH_ARGS:
-                    if args:
-                        args.pop(0)
+                    arg = args.pop(0) if args else None
+                    if m == "k":
+                        if flag == "+" and arg is not None:
+                            self.key = arg
+                        elif flag == "-":
+                            self.key = None
+                    elif m == "b":
+                        if flag == "+" and arg is not None:
+                            self.bans.append(arg)
+                            added_bans.append(arg)
+                        elif flag == "-" and arg is not None:
+                            if arg in self.bans:
+                                self.bans.remove(arg)
+                    # l / e / I: consume the arg, no state to keep
                 # MODE_WITHOUT_ARGS: ignore
+        return added_bans
 
     def _chg_mode(self, nick: str, flag: str, mode: str) -> None:
         if nick in self.member:
@@ -116,9 +140,29 @@ class PDKState:
         self.current_nick: Optional[str] = None
         self.original_nick: Optional[str] = None
         self._try_nick: Optional[str] = None
+        # The user@host the server assigned us (captured from RPL_YOURHOST/002),
+        # used for ban self-defense.  Falls back to config values if unset.
+        self.self_host: Optional[str] = None
         self.current_channels: Dict[str, ChannelState] = {}
 
     # -- nick --------------------------------------------------------------
+    def set_self_host(self, host: str) -> None:
+        if host:
+            self.self_host = host
+
+    def _ban_matches_self(self, mask: str) -> bool:
+        """True if a channel ban mask targets this bot's own identity.
+
+        The mask is an IRC glob (``nick!user@host``).  ``*`` -> any, ``?`` ->
+        one char, mirroring the original madoka self-defense behaviour.
+        """
+        if not self.current_nick or self.config is None:
+            return False
+        host = self.self_host or self.config.hostname or "host"
+        identity = "%s!%s@%s" % (self.current_nick, self.config.user, host)
+        esc = re.escape(mask).replace(r"\*", ".*").replace(r"\?", ".")
+        return re.match("^%s$" % esc, identity, re.I) is not None
+
     def set_nick(self, n: str) -> None:
         self._try_nick = None
         self.current_nick = n
@@ -197,10 +241,14 @@ class PDKState:
                     self.manager.invoke_event(
                         "invoke_bot", "quit_from_channel", chs.name, user, qmsg)
 
-    def on_mode(self, user: str, rch: str, args: List[str]) -> None:
+    def on_mode(self, user: str, rch: str, args: List[str]) -> List[str]:
+        """Apply a MODE.  Returns ban masks that target this bot itself so the
+        caller can send ``MODE #ch -b <mask>`` to remove them (self-defense)."""
         ch = self.canonical_channel_name(rch)
         if ch in self.current_channels:
-            self.current_channels[ch].on_mode(user, args)
+            added = self.current_channels[ch].on_mode(user, args)
+            return [mask for mask in added if self._ban_matches_self(mask)]
+        return []
 
     def on_kick(self, kicker: str, rch: str, user: str, comment: str) -> None:
         ch = self.canonical_channel_name(rch)

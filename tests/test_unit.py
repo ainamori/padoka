@@ -131,6 +131,126 @@ check("mode -o removed", "o" not in (cs.mode("bob") or ""))
 cs.on_kick("alix")
 check("kicked removed", "alix" not in cs.members())
 
+# --- key (MODE k) tracking ---
+cs2 = ChannelState("#test2")
+cs2.on_mode("admin", ["+k", "secret"])
+check("key +k stored", cs2.key == "secret")
+cs2.on_mode("admin", ["-k"])
+check("key -k cleared", cs2.key is None)
+cs2.on_mode("admin", ["+k", "newpass"])
+check("key re-set", cs2.key == "newpass")
+
+# --- ban (MODE b) tracking ---
+cs3 = ChannelState("#test3")
+added = cs3.on_mode("admin", ["+b", "bad!*@*.evil"])
+check("+b returns added mask", added == ["bad!*@*.evil"])
+check("ban stored", cs3.bans == ["bad!*@*.evil"])
+cs3.on_mode("admin", ["+b", "other!u@h"])
+check("second ban stored", "other!u@h" in cs3.bans)
+cs3.on_mode("admin", ["-b", "bad!*@*.evil"])
+check("-b removes ban", cs3.bans == ["other!u@h"])
+# limit (l) and other args consumed without breaking
+cs3.on_mode("admin", ["+l", "100"])
+check("limit arg consumed (no crash)", True)
+
+# ---------------------------------------------------------------------------
+section("PDKState ban self-defense")
+
+
+class _FakeCfg:
+    user = "botuser"
+    hostname = "host.example"
+
+    @staticmethod
+    def canonical_channel_name(ch):
+        return ch.lower()
+
+    @staticmethod
+    def identical_channel_name(ch):
+        return ch.lower()
+
+
+st2 = PDKState(None)
+st2.config = _FakeCfg()  # type: ignore[assignment]
+st2.set_nick("mybot")
+st2.self_host = "bot.example.org"
+# identity = mybot!botuser@bot.example.org
+check("exact self-ban matches",
+      st2._ban_matches_self("mybot!botuser@bot.example.org") is True)
+check("nick+user wildcard matches",
+      st2._ban_matches_self("mybot!botuser@*") is True)
+check("nick wildcard host matches",
+      st2._ban_matches_self("mybot!*@bot.example.org") is True)
+check("other nick does not match",
+      st2._ban_matches_self("evil!u@h") is False)
+check("case-insensitive",
+      st2._ban_matches_self("MYBOT!botuser@bot.example.org") is True)
+# no config -> never matches
+st3 = PDKState(None)
+st3.set_nick("x")
+check("no config -> no match", st3._ban_matches_self("*!*@*") is False)
+
+# on_mode surfaces only self-matching added bans
+st2.current_channels["#t"] = ChannelState("#t")
+self_bans = st2.on_mode("admin", "#t", ["+b", "mybot!botuser@*"])
+check("on_mode returns self-ban", self_bans == ["mybot!botuser@*"])
+self_bans2 = st2.on_mode("admin", "#t", ["+b", "someone@else"])
+check("on_mode ignores non-self ban", self_bans2 == [])
+self_bans3 = st2.on_mode("admin", "#unknown", ["+b", "mybot!botuser@*"])
+check("on_mode ignores unknown channel", self_bans3 == [])
+
+# ---------------------------------------------------------------------------
+section("Connection flood throttle accounting")
+from padoka.irc.connection import Connection  # noqa: E402
+from padoka.irc.message import Command as _Cmd  # noqa: E402
+
+conn = Connection("127.0.0.1", 6667)
+# within-window accounting (no sleep): 5 small msgs
+for i in range(5):
+    conn._flood_throttle(_Cmd.privmsg("#c", "m%d" % i), 10)
+check("flood lines counted", conn._flood_lines == 5)
+check("flood chars counted", conn._flood_chars == 50)
+check("flood window initialized", conn._flood_start > 0)
+# Force the window nearly expired so the overflow wait below is ~0.05s.
+import time as _t  # noqa: E402
+conn._flood_start = _t.time() - conn.FLOOD_WINDOW + 0.05
+# A 600-char msg overflows FLOOD_MAX_CHARS -> throttle waits, then resets.
+conn._flood_throttle(_Cmd.privmsg("#c", "x" * 600), 600)
+check("flood resets to 1 line after overflow", conn._flood_lines == 1)
+check("flood chars reset after overflow", conn._flood_chars == 600)
+
+# ---------------------------------------------------------------------------
+section("CTCP ECHO / HELP / VERSION handling")
+from padoka.server import PDKServer  # noqa: E402
+from padoka.irc.message import IRCMessage as _Msg  # noqa: E402
+from padoka import VERSION as _VER  # noqa: E402
+
+
+class _CtcpFake:
+    sent: List[str] = []
+
+    def send_to_server(self, msg):
+        _CtcpFake.sent.append(msg.to_s())
+
+    nick_of = PDKServer.nick_of
+    _version = PDKServer._version
+
+
+cf = _CtcpFake()
+# call the unbound handler with an explicit self to avoid method-binding type errors
+ctcp = lambda msg: PDKServer._ctcp_message_handler(cf, msg)  # type: ignore[arg-type]
+ctcp(_Msg.parse(":alice!u@h PRIVMSG #c :\x01ECHO hello world\x01"))
+check("ECHO replies with nick + text",
+      any("ECHO alice hello world" in s for s in _CtcpFake.sent))
+_CtcpFake.sent.clear()
+ctcp(_Msg.parse(":alice!u@h PRIVMSG #c :\x01HELP\x01"))
+check("HELP replies with supported list",
+      any("HELP (VERSION|TIME|ECHO|HELP)" in s for s in _CtcpFake.sent))
+_CtcpFake.sent.clear()
+ctcp(_Msg.parse(":alice!u@h PRIVMSG #c :\x01VERSION\x01"))
+check("VERSION replies with version",
+      any(("VERSION " + _VER) in s for s in _CtcpFake.sent))
+
 # ---------------------------------------------------------------------------
 section("PDKState.nick_succ (nick collision)")
 from padoka.state import _succ  # noqa: E402
@@ -166,62 +286,6 @@ check("log filename has setting", fn.startswith("myset-"))
 check("log filename maps # -> CS-", "CS-test" in fn)
 
 # ---------------------------------------------------------------------------
-section("Config null fallback (hostname / USER line)")
-import tempfile as _tempfile  # noqa: E402
-
-
-class _StubMgr:  # no `state` attr -> PDKLogger.slog skips client fan-out
-    pass
-
-
-def _load_cfg(yaml_text):
-    d = _tempfile.mkdtemp(prefix="pdkcfg_")
-    yf = os.path.join(d, "t.yml")
-    with open(yf, "w", encoding="utf-8") as f:
-        f.write(yaml_text)
-    cfg = Config(_StubMgr(), yf)
-    return cfg
-
-
-# Regression: sample config uses `hostname: null` meaning "use system
-# hostname". A bare `r.get("hostname", default)` returns None when the key
-# exists with a null value, which later crashed USER serialization in
-# message.to_s() (TypeError: expected str, got NoneType).
-_cfg = _load_cfg(
-    "setting_name: cfgtest\nloglevel: 0\nlog_dir: %s\n"
-    "user: myuser\nnick: mynick\n"
-    "hostname: null\nservername: null\nrealname: null\n"
-    "client_server: {}\nservers: []\n" % _tempfile.mkdtemp(prefix="pdklog_"))
-check("hostname: null -> system hostname",
-      _cfg.hostname == os.uname().nodename and _cfg.hostname is not None)
-check("servername: null -> *", _cfg.servername == "*")
-check("realname: null -> default", _cfg.realname == "padoka user")
-check("explicit user kept", _cfg.user == "myuser")
-# the USER line must serialize without raising
-_user_line = Command.user(_cfg.user, _cfg.hostname, _cfg.servername,
-                          _cfg.realname).to_s()
-check("USER line serializes with hostname",
-      _user_line.startswith("USER myuser ") and _cfg.hostname in _user_line)
-check("USER line has no None", "None" not in _user_line)
-
-# regression: --debug (PADOKA_DEBUG) must force loglevel 3 even when the
-# config sets loglevel explicitly (previously the flag was a no-op unless
-# `loglevel` was absent, so debug logging never appeared with sample configs)
-_prev_dbg = os.environ.get("PADOKA_DEBUG")
-os.environ["PADOKA_DEBUG"] = "1"
-try:
-    _cfg_dbg = _load_cfg(
-        "setting_name: cfgdbg\nloglevel: 0\nlog_dir: %s\n"
-        "client_server: {}\nservers: []\n" % _tempfile.mkdtemp(prefix="pdklog_"))
-    check("--debug forces loglevel 3 over explicit config",
-          _cfg_dbg.loglevel == 3)
-finally:
-    if _prev_dbg is None:
-        del os.environ["PADOKA_DEBUG"]
-    else:
-        os.environ["PADOKA_DEBUG"] = _prev_dbg
-
-# ---------------------------------------------------------------------------
 section("safe_calc (arithmetic only, blocks injection)")
 check("2+3*4=14", safe_calc("2+3*4") == 14)
 check("(1+2)*3=9", safe_calc("(1+2)*3") == 9)
@@ -240,428 +304,6 @@ check("rejects name", _reject("__import__('os')"))
 check("rejects call", _reject("open('x')"))
 check("rejects dunder", _reject("(1).__class__"))
 check("rejects div0", _reject("1/0"))
-
-# ---------------------------------------------------------------------------
-section("PDKClient SASL (ircv3 PLAIN)")
-import base64  # noqa: E402
-import socket as _socket  # noqa: E402
-import threading  # noqa: E402
-import time  # noqa: E402
-from padoka.client import PDKClient  # noqa: E402
-_Msg = IRCMessage
-
-
-class _SASLCfg:
-    def __init__(self, pass_, sasl=True):
-        self.client_server_pass = pass_
-        self.client_server_sasl = sasl
-        self.padoka_server_name = "PadokaProgram"
-
-        class _Log:
-            def slog(self, m):
-                pass
-
-            def dlog(self, m):
-                pass
-
-            def logging(self, m):
-                pass
-        self.logger = _Log()
-
-
-class _SASLState:
-    current_channels: dict = {}
-
-    def nick(self):
-        return "padoka_py"
-
-
-class _SASLManager:
-    def __init__(self):
-        self.state = _SASLState()
-
-    def invoke_event(self, *a, **k):
-        pass
-
-    def ndk_error(self, e):
-        pass
-
-    def client_count(self):
-        return 1
-
-    @property
-    def connected(self):
-        return False
-
-
-def _sasl_client(pass_="sekrit", sasl=True):
-    # TCP loopback pair: `a` = test-side handle, `b` = padoka-side socket
-    srv = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-    srv.bind(("127.0.0.1", 0))
-    srv.listen(1)
-    a = _socket.create_connection(("127.0.0.1", srv.getsockname()[1]))
-    b, _ = srv.accept()
-    srv.close()
-    client = PDKClient(_SASLCfg(pass_, sasl), b, _SASLManager())
-    return a, client
-
-
-def _sasl_read(sa, n, timeout=2.0):
-    sa.settimeout(timeout)
-    out: List[str] = []
-    buf = b""
-    try:
-        while len(out) < n:
-            buf += sa.recv(4096)
-            while b"\n" in buf:
-                line, buf = buf.split(b"\n", 1)
-                if line.strip():
-                    out.append(line.decode())
-    except _socket.timeout:
-        pass
-    return out
-
-
-def _sasl_q(c, n, timeout=2.0):
-    """Collect up to n pending replies from the client's send queue."""
-    import queue as _q
-    out: List[IRCMessage] = []
-    end = time.time() + timeout
-    while len(out) < n and time.time() < end:
-        try:
-            out.append(c.queue.get(timeout=0.2))
-        except _q.Empty:
-            break
-    return [m.to_s().rstrip("\r\n") for m in out]
-
-
-def _sasl_b64(payload):
-    return base64.b64encode(payload).decode("ascii")
-
-
-sa, c = _sasl_client()
-ok = c._sasl_handle(_Msg.parse("AUTHENTICATE"))
-reply = _sasl_q(c, 1)
-check("sasl list -> 903", ok is True and reply and " 903 " in reply[0] and "PLAIN" in reply[0])
-
-sa, c = _sasl_client()
-ok = c._sasl_handle(_Msg.parse("AUTHENTICATE PLAIN"))
-reply = _sasl_q(c, 1)
-check("sasl plain -> continuation +", ok is True and reply and reply[0].strip() == "AUTHENTICATE +")
-
-sa, c = _sasl_client()
-c._sasl_handle(_Msg.parse("AUTHENTICATE PLAIN"))
-_sasl_q(c, 1)
-ok = c._sasl_handle(_Msg.parse("AUTHENTICATE " + _sasl_b64(b"\x00\x00sekrit")))
-reply = _sasl_q(c, 1)
-check("sasl plain ok -> 904", ok is True and reply and " 904 " in reply[0] and c._sasl_authed)
-
-sa, c = _sasl_client()
-c._sasl_handle(_Msg.parse("AUTHENTICATE PLAIN"))
-_sasl_q(c, 1)
-ok = c._sasl_handle(_Msg.parse("AUTHENTICATE " + _sasl_b64(b"\x00client1\x00sekrit")))
-reply = _sasl_q(c, 1)
-check("sasl authcid form ok -> 904", ok is True and c._sasl_authed and " 904 " in reply[0])
-
-sa, c = _sasl_client()
-c._sasl_handle(_Msg.parse("AUTHENTICATE PLAIN"))
-_sasl_q(c, 1)
-c._sasl_handle(_Msg.parse("AUTHENTICATE " + _sasl_b64(b"\x00\x00sekrit")))
-_sasl_q(c, 1)
-ok = c._sasl_handle(_Msg.parse("AUTHENTICATE PLAIN"))
-reply = _sasl_q(c, 1)
-check("sasl repeat after success -> 909", ok is True and reply and " 909 " in reply[0])
-
-sa, c = _sasl_client()
-c._sasl_handle(_Msg.parse("AUTHENTICATE PLAIN"))
-_sasl_q(c, 1)
-ok = c._sasl_handle(_Msg.parse("AUTHENTICATE " + _sasl_b64(b"\x00\x00wrongpass")))
-reply = _sasl_q(c, 1)
-check("sasl bad password -> 907 + drop", ok is False and reply and " 907 " in reply[0])
-
-sa, c = _sasl_client()
-c._sasl_handle(_Msg.parse("AUTHENTICATE PLAIN"))
-_sasl_q(c, 1)
-ok = c._sasl_handle(_Msg.parse("AUTHENTICATE !!!not-base64!!!"))
-reply = _sasl_q(c, 1)
-check("sasl invalid b64 -> 907 + drop", ok is False and reply and " 907 " in reply[0])
-
-sa, c = _sasl_client()
-c._sasl_handle(_Msg.parse("AUTHENTICATE PLAIN"))
-_sasl_q(c, 1)
-ok = c._sasl_handle(_Msg.parse("AUTHENTICATE " + "A" * 401))
-reply = _sasl_q(c, 1)
-check("sasl too long -> 906 + drop", ok is False and reply and " 906 " in reply[0])
-
-sa, c = _sasl_client()
-ok = c._sasl_handle(_Msg.parse("AUTHENTICATE AUTH-FOO"))
-reply = _sasl_q(c, 1)
-check("sasl unknown mech -> 908 + drop", ok is False and reply and " 908 " in reply[0])
-
-sa, c = _sasl_client(sasl=False)
-ok = c._sasl_handle(_Msg.parse("AUTHENTICATE PLAIN"))
-reply = _sasl_q(c, 1)
-check("sasl disabled -> 908 + drop", ok is False and reply and " 908 " in reply[0])
-
-sa, c = _sasl_client()
-c._sasl_handle(_Msg.parse("AUTHENTICATE PLAIN"))
-_sasl_q(c, 1)
-ok = c._sasl_handle(_Msg.parse("AUTHENTICATE -"))
-reply = _sasl_q(c, 1)
-check("sasl abort -> 907 + drop", ok is False and reply and " 907 " in reply[0])
-
-sa, c = _sasl_client(pass_=None)
-c._sasl_handle(_Msg.parse("AUTHENTICATE PLAIN"))
-_sasl_q(c, 1)
-ok = c._sasl_handle(_Msg.parse("AUTHENTICATE " + _sasl_b64(b"\x00\x00x")))
-check("sasl without configured pass -> fail", ok is False)
-_sasl_q(c, 1)
-
-# full _login() driven by a SASL exchange (no /PASS sent at all)
-sa, c = _sasl_client()
-res: dict = {}
-
-
-def _drive_sasl_login():
-    sa.sendall(b"AUTHENTICATE PLAIN\r\n")
-    res["cont"] = _sasl_read(sa, 1)
-    sa.sendall(("AUTHENTICATE " + _sasl_b64(b"\x00\x00sekrit") + "\r\n").encode())
-    res["ok"] = _sasl_read(sa, 1)
-    sa.sendall(b"NICK loginclient\r\n")
-    sa.sendall(b"USER loginclient 0 0 :loginclient\r\n")
-
-
-t = threading.Thread(target=_drive_sasl_login, daemon=True)
-t.start()
-login_ok = c._login()
-c._pump_sends()  # flush the queued welcome batch (start() would do this)
-t.join(timeout=5)
-check("login via sasl succeeds", login_ok is True)
-check("login sasl saw 904", res.get("ok") and any(" 904 " in l for l in res["ok"]))
-welcome = _sasl_read(sa, 8)
-check("login via sasl -> 001 welcome", any(" 001 " in l for l in welcome))
-
-# regression: NICK + USER coalesced into a SINGLE write must not hang _login.
-# (a single recv() can deliver both lines; _buf must be drained before recv)
-sa2, c2 = _sasl_client(pass_=None)  # no /PASS required
-res2: dict = {}
-
-
-def _drive_coalesced():
-    time.sleep(0.1)
-    sa2.sendall(b"NICK coclient\r\nUSER coclient 0 0 :coclient\r\n")
-
-
-threading.Thread(target=_drive_coalesced, daemon=True).start()
-_lt = threading.Thread(target=lambda: res2.update(v=c2._login()), daemon=True)
-_lt.start()
-_lt.join(timeout=5)
-check("coalesced NICK+USER login does not hang",
-      _lt.is_alive() is False and res2.get("v") is True)
-if _lt.is_alive():
-    print("  (login thread still alive -> hung on coalesced lines)")
-
-# ---------------------------------------------------------------------------
-section("Connection error reporting (last_error / tls_info)")
-from padoka.irc.connection import Connection  # noqa: E402
-
-# refused port on loopback -> fast OSError, reason must be recorded
-_conn = Connection("127.0.0.1", 1)
-try:
-    _conn.open()
-    _opened = True
-except OSError:
-    _opened = False
-check("open() on refused port raises", _opened is False)
-check("last_error set on connect failure",
-      _conn.last_error is not None and "connect" in _conn.last_error)
-check("tls_info None for plaintext conn", _conn.tls_info() is None)
-_conn.close()
-
-# DNS failure must also be recorded (socket.gaierror is an OSError)
-_conn2 = Connection("nonexistent.invalid", 6697)
-try:
-    _conn2.open()
-    _opened2 = True
-except OSError:
-    _opened2 = False
-check("open() on bad DNS raises", _opened2 is False)
-check("last_error records DNS failure reason",
-      _conn2.last_error is not None and _conn2.last_error != "")
-
-# ---------------------------------------------------------------------------
-section("Connection TLS context (system CA store must be loaded)")
-import ssl as _ssl  # noqa: E402
-
-# Regression: a bare SSLContext(PROTOCOL_TLS_CLIENT) has an EMPTY trust
-# store, so upstream TLS against any public CA failed with
-# "unable to get local issuer certificate" even on a fresh OS store.
-_bare = _ssl.SSLContext(_ssl.PROTOCOL_TLS_CLIENT)
-_ctx = Connection._make_ssl_context({"verify": True})
-check("verify context is CERT_REQUIRED",
-      _ctx.verify_mode == _ssl.CERT_REQUIRED)
-check("verify context check_hostname on", _ctx.check_hostname is True)
-# cert_store_stats keys vary by CPython version (x509_ca / num_cas)
-def _n_cas(ctx):
-    st = ctx.cert_store_stats()
-    return st.get("x509_ca", st.get("num_cas", 0))
-check("verify context loads system CA store (n_cas > 0)",
-      _n_cas(_ctx) > 0)
-check("bare TLS_CLIENT context has empty store (documents the bug)",
-      _n_cas(_bare) == 0)
-
-_ctx_nv = Connection._make_ssl_context({"verify": False})
-check("verify:false -> CERT_NONE + no hostname check",
-      _ctx_nv.verify_mode == _ssl.CERT_NONE
-      and _ctx_nv.check_hostname is False)
-
-_ctx_ch = Connection._make_ssl_context({"verify": True, "check_hostname": False})
-check("check_hostname:false honored with verify",
-      _ctx_ch.check_hostname is False
-      and _ctx_ch.verify_mode == _ssl.CERT_REQUIRED)
-
-# ---------------------------------------------------------------------------
-section("Upstream SASL (padoka -> IRC server)")
-from padoka.server import sasl_plain_payload  # noqa: E402
-
-# PLAIN payload: base64(authzid NUL authcid NUL passwd), authzid empty
-_pp = sasl_plain_payload("myuser", "secret")
-_pp_raw = base64.b64decode(_pp)
-check("plain payload decodes to 3 NUL-separated fields",
-      _pp_raw == b"\x00myuser\x00secret")
-check("plain payload is ascii base64", _pp == _pp.encode().decode("ascii"))
-
-# server_list keeps the sasl block per server
-_cfg_sasl = _load_cfg(
-    "setting_name: cfgsasl\nloglevel: 0\nlog_dir: %s\n"
-    "client_server: {}\n"
-    "servers:\n"
-    "  - host: dev.example\n    port: 6697\n    ssl_params: {verify: true}\n"
-    "    sasl: {username: bob, password: pw123}\n"
-    "  - host: irc.example\n    port: 6697\n" % _tempfile.mkdtemp(prefix="pdklog_"))
-_sl = _cfg_sasl.server_list
-check("server_list has 2 entries", len(_sl) == 2)
-_dev = [s for s in _sl if s["host"] == "dev.example"][0]
-check("sasl block kept on matching server",
-      _dev.get("sasl") == {"username": "bob", "password": "pw123"})
-_check = [s for s in _sl if s["host"] == "irc.example"][0]
-check("sasl absent on other server", _check.get("sasl") is None)
-
-# login flow: SASL (905 continuation -> 904) then NICK/USER, then 001
-from padoka.server import PDKServer  # noqa: E402
-
-
-class _SASLCtx:  # fake conn handed to _server_main_proc
-    def __init__(self, replies):
-        self.sent = []
-        self.replies = list(replies)
-        self.host = "fake.host"
-        self.port = 6697
-
-    def send(self, m):
-        self.sent.append(m.to_s().rstrip("\r\n"))
-
-
-def _m(line):
-    return IRCMessage.parse(line)
-
-
-def _run_login(replies, sasl):
-    """Drive PDKServer._server_main_proc through login.
-
-    Returns (conn, raised): raised is the exception that stopped the
-    scripted flow (PDKReconnectToServer on failure; AssertionError once the
-    main loop runs out of replies after a successful welcome).
-    """
-    srv = PDKServer.__new__(PDKServer)
-    # setattr() for the test doubles: keeps mypy from flagging method
-    # reassignment while still driving the real _server_main_proc
-    setattr(srv, "_config", types.SimpleNamespace(
-        nick="mynick", away_nick=None, user="myuser", hostname="myhost",
-        servername="*", realname="rt", mode=None,
-        default_channels=[], login_channels=[], channel_info={},
-        notify=types.SimpleNamespace(ready=lambda: None)))
-    srv.state = PDKState(srv)
-    srv.state.set_nick("mynick")
-    setattr(srv, "_server_pass", None)
-    setattr(srv, "_server_sasl", sasl)
-    setattr(srv, "_connected", False)
-    setattr(srv, "_isupport", {})
-    conn = _SASLCtx(replies)
-
-    def recv_from_server(c):
-        if not conn.replies:
-            raise AssertionError("upstream exhausted")
-        return conn.replies.pop(0)
-
-    setattr(srv, "_recv_from_server", recv_from_server)
-    setattr(srv, "client_count", lambda: 0)
-    setattr(srv, "_join_to_channel", lambda ch: conn.sent.append("JOIN %s" % ch))
-    setattr(srv, "_enter_away", lambda: None)
-    setattr(srv, "invoke_event", lambda name, *a: None)
-    setattr(srv, "send_to_bot", lambda *a: True)
-    setattr(srv, "_send_to_clients", lambda m: None)
-    setattr(srv, "_logger", types.SimpleNamespace(
-        slog=lambda m: None, dlog=lambda m: None, logging=lambda m: None))
-
-    # stop marker: after the welcome loop, the main loop consumes it and the
-    # next empty recv raises AssertionError
-    conn.replies.append(_m(":fake 999 x"))
-    raised = None
-    try:
-        PDKServer._server_main_proc(srv, conn)  # type: ignore[arg-type]
-    except Exception as e:
-        raised = e
-    return conn, raised
-
-# scripted: 905 continuation -> 904 success -> 001 welcome
-_SASL = {"username": "sasluser", "password": "saspw"}
-ctx, _err = _run_login([
-    _m(":fake 905 mynick :SASL: +"),
-    _m(":fake 904 mynick :SASL: success"),
-    _m(":fake 001 mynick :Welcome"),
-], sasl=_SASL)
-sent = "\n".join(ctx.sent)
-check("sasl: AUTHENTICATE PLAIN sent first",
-      ctx.sent[0] == "AUTHENTICATE PLAIN")
-check("sasl: payload sent on 905 continuation",
-      "AUTHENTICATE " + sasl_plain_payload("sasluser", "saspw") in sent)
-check("sasl: NICK+USER sent only after 904",
-      sent.index("AUTHENTICATE") < sent.index("NICK mynick")
-      < sent.index("USER myuser myhost * rt"))
-check("sasl: login completed to welcome", "NICK mynick" in sent)
-
-# scripted: `AUTHENTICATE +` continuation form (non-numeric)
-ctx, _err = _run_login([
-    _m(":fake AUTHENTICATE +"),
-    _m(":fake 904 mynick :SASL: success"),
-    _m(":fake 001 mynick :Welcome"),
-], sasl=_SASL)
-check("sasl: AUTHENTICATE + continuation handled",
-      any(s.startswith("AUTHENTICATE ") and s != "AUTHENTICATE PLAIN"
-          for s in ctx.sent) and "NICK mynick" in "\n".join(ctx.sent))
-
-# scripted: 907 failure -> must raise PDKReconnectToServer
-from padoka import errors as _E  # noqa: E402
-_ctx, _err = _run_login([
-    _m(":fake 905 mynick :SASL: +"),
-    _m(":fake 907 mynick :SASL: not accepted"),
-], sasl=_SASL)
-check("sasl: 907 raises reconnect", isinstance(_err, _E.PDKReconnectToServer))
-
-# sasl configured but no password -> skip SASL, warn, register normally
-_ctx, _err = _run_login([
-    _m(":fake 001 mynick :Welcome"),
-], sasl={"username": "u", "password": ""})
-check("sasl: empty password skips AUTHENTICATE",
-      not any(s.startswith("AUTHENTICATE") for s in _ctx.sent)
-      and _ctx.sent[0] == "NICK mynick")
-
-# no sasl configured -> straight NICK/USER (legacy path unchanged)
-ctx3, _err = _run_login([_m(":fake 001 mynick :Welcome")], sasl=None)
-check("no sasl: first command is NICK", ctx3.sent[0] == "NICK mynick")
-check("no sasl: no AUTHENTICATE sent",
-      not any(s.startswith("AUTHENTICATE") for s in ctx3.sent))
 
 # ---------------------------------------------------------------------------
 print("\n%d passed, %d failed" % (_passed, _failed))

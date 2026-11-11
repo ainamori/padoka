@@ -24,12 +24,13 @@ services:
     # YAML の client_server.port と一致させる（デフォルト 6667）。
     ports:
       - "${PADOKA_CLIENT_PORT:-6667}:6667/tcp"
-    # 生存判定: クライアントポート(6667)で TLS ハンドシェイクが通れば healthy。
-    # （デフォルト設定は TLS のみ。client_server.ssl_cert_file を無効化した場合は
-    #   "import socket; socket.create_connection(('127.0.0.1', 6667), 3)" に戻す）
+      # WebUI のポート。config/padoka.yml の webui.enabled: true で有効化。
+      # PADOKA_WEBUI_PORT で公開ポートを変更可能（デフォルト 8080）。
+      - "${PADOKA_WEBUI_PORT:-8080}:8080/tcp"
+    # 生存判定: クライアントポート(6667)が accept できれば healthy。
     # YAML で client_server.port を変えた場合は 6667 も合わせて更新すること。
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket,ssl;c=ssl.create_default_context();c.check_hostname=False;c.verify_mode=ssl.CERT_NONE;c.wrap_socket(socket.create_connection(('127.0.0.1',6667),3))"]
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 6667), 3)"]
       interval: 30s
       timeout: 5s
       retries: 3

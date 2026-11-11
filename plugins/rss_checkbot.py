@@ -115,7 +115,7 @@ class RSS_CheckBot(PDKBot):
         tm = datetime.now()
         if tm.timestamp() - self._tm * 60 > self._prevtm.timestamp():
             self._prevtm = tm
-            self.make_notice()
+            self.run_async(self.make_notice)
 
     def make_notice(self):
         items = []

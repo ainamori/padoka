@@ -48,8 +48,10 @@ class OpenSearchBot(PDKBot):
             return
         m = self._pattern.search(msg)
         if m:
-            ret = self.result(m.group(1))
-            self.send_notice(ch, "%s bot: %s" % (self._bot_name, ret))
+            self.run_async(self._do_result, ch, m.group(1))
+
+    def _do_result(self, ch, word):
+        self.send_notice(ch, "%s bot: %s" % (self._bot_name, self.result(word)))
 
     def result(self, key):
         escaped = quote(key)

@@ -23,6 +23,9 @@ docker compose up -d
   ```bash
   PADOKA_CONFIG_HOST=/path/to/my.yml docker compose up -d
   ```
+- **WebUI ポート**: 8080 を公開（`PADOKA_WEBUI_PORT` で変更可能）。
+  利用するには `config/padoka.yml` の `webui.enabled: true`。
+  `http://<ホスト>:8080/` でアクセス。
 
 ### host ネットワーク（Linux）
 
@@ -32,6 +35,7 @@ docker compose -f docker-compose.host.yml up -d
 
 - ポート公開なし、ホストのポートに直接バインド
 - `client_server.port`（デフォルト 6667）がホストで空いていれば接続可能
+- WebUI は 8080 に直接バインドされる（`webui.enabled: true` の場合）
 
 ## 確認
 
@@ -65,27 +69,3 @@ volumes:
 
 IRC クライアント側（irssi 等）は `PADOKA_CLIENT_PORT` で指定した
 ホストポートに向けて接続します。
-
-## TLS / SASL
-
-クライアントポート（デフォルト 6667）は **TLS のみ** で動きます。
-自己署名のサンプル証明書・秘密鍵が `config/certs/padoka.crt` /
-`padoka.key` としてリポジトリに同梱され、`COPY config/` でイメージに
-取り込まれます（存在しない場合のみビルド時に再生成）。 SASL PLAIN 認証も
-有効で、パスワードは `client_server.pass` です。
-
-irssi での接続例:
-
-```bash
-irssi
-/SETTINGS SET -re save.sasl.mechanism PLAIN
-/SETTINGS SET -re save.sasl.username myuser
-/SETTINGS SET -re save.sasl.password PadokaPassWord
-/SAVE
-/conn -server 127.0.0.1 -port 6667 -ssl -sasl
-```
-
-自己署名のため SSL 検証エラーが出ます。指紋を登録するか、開発時のみ
-`-ssl_verify=off` を使ってください。**公開ホストで運用する場合は
-`ssl_cert_file` / `ssl_key_file` を CA 発行証明書（Let's Encrypt 等）へ
-差し替えてください。**

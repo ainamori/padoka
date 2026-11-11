@@ -170,6 +170,10 @@ class MessageStores:
         self.limit = limit
         self.config = config
         self.pools: Dict[str, MessageStore] = {}
+        # Guards self.pools (and per-store mutation) against concurrent push
+        # (server thread + async bot threads) and each_channel_pool iteration
+        # (e.g. BackLogBot on the server thread).
+        self._lock = threading.Lock()
 
     def _make_store(self, limit: int) -> MessageStore:
         if self.kind == "time":
@@ -180,22 +184,26 @@ class MessageStores:
         ch = msgobj.get("ccn")
         if ch is None:
             ch = ""
-        store = self.pools.get(ch)
-        if store is None:
-            chinfo = self.config.channel_info.get(ch) if hasattr(
-                self.config, "channel_info") else None
-            limit = (chinfo or {}).get("backlog_lines", self.limit) \
-                if chinfo else self.limit
-            store = self.pools[ch] = self._make_store(limit)
-        store.push(msgobj)
+        with self._lock:
+            store = self.pools.get(ch)
+            if store is None:
+                chinfo = self.config.channel_info.get(ch) if hasattr(
+                    self.config, "channel_info") else None
+                limit = (chinfo or {}).get("backlog_lines", self.limit) \
+                    if chinfo else self.limit
+                store = self.pools[ch] = self._make_store(limit)
+            store.push(msgobj)
 
     def each_channel_pool(self):
-        for ch, store in self.pools.items():
-            yield ch, store.pool
+        with self._lock:
+            snapshot = [(ch, list(store.pool)) for ch, store in self.pools.items()]
+        for ch, pool in snapshot:
+            yield ch, pool
 
     def clear(self) -> None:
-        for store in self.pools.values():
-            store.clear()
+        with self._lock:
+            for store in self.pools.values():
+                store.clear()
 
 
 # --- the logger ----------------------------------------------------------

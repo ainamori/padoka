@@ -26,8 +26,9 @@
 # 留意:
 #   * dev.ircnet.ne.jp は開発・検証目的のため予告なく再起動される。
 #     長期間の運用には irc / dh を使うこと（デフォルト設定もこれ）。
-#   * 上流サーバー側の SASL (AUTHENTICATE) は padoka は未対応。
-#     nick の識別は identifynickserv ボット（NickServ /identify）で行う。
+#   * 上流 SASL (ircv3 PLAIN) は servers[].sasl で対応（海外からの dev
+#     接続や登録 nick 使用に必要）。sasl を使わない場合は
+#     identifynickserv ボット（NickServ /identify）で識別する。
 #   * irc.media.kyoto-u.ac.jp / irc.huie.hokudai.ac.jp は停止中のため
 #     servers に入れていない。再開されてから追加すること。
 

@@ -35,6 +35,7 @@ from .irc.message import IRCMessage, Command, ReplyName
 from .irc.connection import Connection, ConnectionClosed
 from .logger import PDKLogger
 from .state import PDKState
+from .webui import WebUI
 
 __all__ = ["PDKServer", "PrefixObject", "sasl_plain_payload"]
 
@@ -48,6 +49,7 @@ def sasl_plain_payload(username: str, password: str) -> str:
     return base64.b64encode(
         b"\x00" + str(username).encode("utf-8")
         + b"\x00" + str(password).encode("utf-8")).decode("ascii")
+
 
 # sentinel tag used to mark internal events in the shared input queue
 EVENT = object()
@@ -84,10 +86,12 @@ class PDKServer:
         self._isupport: Dict[str, object] = {}
         self._conn: Optional[Connection] = None
         self._server_pass: Optional[str] = None
+        self._server_sasl: Optional[dict] = None
         self._client_srv: Optional[socket.socket] = None
         self._server_thread: Optional[threading.Thread] = None
         self._clients_thread: Optional[threading.Thread] = None
         self._timer_thread: Optional[threading.Thread] = None
+        self._webui = None  # type: Optional["WebUI"]
         # Assigned by reload_config() during __init__.
         self._config: Config
         self._logger: PDKLogger
@@ -139,6 +143,7 @@ class PDKServer:
         self._timer_thread = threading.Thread(
             target=self._timer_loop, daemon=True, name="ndk-timer")
         self._timer_thread.start()
+        self._init_webui()
 
         try:
             while not self._exiting:
@@ -151,18 +156,34 @@ class PDKServer:
                     return
         finally:
             self._exiting = True
-            # close the listener so a thread blocked in accept() wakes up
-            srv = self._client_srv
-            if srv is not None:
-                try:
-                    srv.close()
-                except OSError:
-                    pass
+            self._stop_webui()
             for t in (self._server_thread, self._clients_thread, self._timer_thread):
                 if t and t.is_alive():
                     t.join(timeout=3)
             if self._conn:
                 self._conn.close()
+
+    # ------------------------------------------------------------- webui
+    def _init_webui(self) -> None:
+        if not self._config.webui_enabled:
+            self._webui = None
+            return
+        if self._webui is None:
+            self._webui = WebUI(self._config, self)
+            self._webui.start()
+
+    def _stop_webui(self) -> None:
+        if self._webui is not None:
+            self._webui.stop()
+            self._webui = None
+
+    def _webui_push(self, msg: IRCMessage) -> None:
+        w = self._webui
+        if w is not None:
+            try:
+                w.on_message(msg)
+            except Exception:
+                pass
 
     # --------------------------------------------------------- server thread
     def next_server_info(self):
@@ -188,15 +209,9 @@ class PDKServer:
                 self._conn = conn
                 self._logger.slog(
                     "Server connection to %s:%s." % (conn.host, conn.port))
-                self._logger.dlog("  ssl_params=%r" % (conn.ssl_params,))
                 self._pong_received = True
                 try:
                     conn.open()
-                    info = conn.tls_info()
-                    if info:
-                        self._logger.slog("TLS handshake ok (%s)." % info)
-                    else:
-                        self._logger.dlog("plaintext upstream connection.")
                     self._server_main_proc(conn)
                 finally:
                     if self._config.quit_message:
@@ -210,28 +225,10 @@ class PDKServer:
                 self._part_from_all_channels()
                 self._logger.slog("Reconnect request (no server response, or client request).")
                 self._sleep_reconnect()
-            except ConnectionClosed:
+            except (ConnectionClosed, OSError, IOError):
                 self._connected = False
                 self._part_from_all_channels()
-                detail = conn.last_error if conn is not None else None
-                if detail:
-                    self._logger.slog(
-                        "Connection closed by server (%s). Trying to reconnect."
-                        % detail)
-                else:
-                    self._logger.slog(
-                        "Connection closed by server before/without any data "
-                        "(no socket error recorded). Trying to reconnect.")
-                self._sleep_reconnect()
-            except (OSError, IOError) as e:
-                self._connected = False
-                detail = (conn.last_error if conn is not None else None) \
-                    or ("%s: %s" % (type(e).__name__, e))
-                host = conn.host if conn is not None else "?"
-                port = conn.port if conn is not None else "?"
-                self._logger.slog(
-                    "Upstream connect to %s:%s failed (%s). Trying to reconnect."
-                    % (host, port, detail))
+                self._logger.slog("Connection closed by server. Trying to reconnect.")
                 self._sleep_reconnect()
             except E.PDKQuitProgram:
                 break
@@ -320,15 +317,15 @@ class PDKServer:
             if cmd == "001":
                 break
             if cmd in ("433", "437"):
-                # 433/437: params[0] is the nickname (RFC1459: "433 nick :nick in use")
-                nick = self.state.nick_succ(q.params[0] if q.params else "")
+                nick = self.state.nick_succ(q.params[1] if len(q.params) > 1 else "")
                 self.state.set_nick(nick)
                 conn.send(Command.nick(nick))
             elif cmd == "ERROR":
-                # log the server's reason -- a bare reconnect hides it
-                self._logger.slog("Server sent ERROR during login: %s" % q)
                 raise E.PDKReconnectToServer
-            elif cmd in ("NOTICE", "020", "PRIVMSG", "004"):
+            elif cmd == "002":
+                # RPL_YOURHOST — capture the server-assigned host for bans
+                self._capture_self_host(q)
+            elif cmd in ("NOTICE", "020", "PRIVMSG", "004", "003"):
                 continue
             else:
                 self._logger.slog("Server login fail!(%s)" % q)
@@ -373,7 +370,18 @@ class PDKServer:
                 self.state.on_topic(self.nick_of(q), q.params[0],
                                     q.params[1] if len(q.params) > 1 else "")
             elif cmd == "MODE":
-                self.state.on_mode(self.nick_of(q), q.params[0], q.params[1:])
+                if len(q.params) > 0 and re.match(r"^[#&+!]", q.params[0]):
+                    self_bans = self.state.on_mode(self.nick_of(q), q.params[0],
+                                                    q.params[1:])
+                    for mask in self_bans:
+                        self._logger.slog(
+                            "Removing self-ban %s on %s" % (mask, q.params[0]))
+                        self.send_to_server(Command.mode(q.params[0], "-b", mask))
+                else:
+                    self.state.on_mode(self.nick_of(q), q.params[0], q.params[1:])
+            elif cmd == "002":
+                # RPL_YOURHOST — (re)capture our host after nick changes
+                self._capture_self_host(q)
             elif cmd == "KICK":
                 self.state.on_kick(self.nick_of(q), q.params[0],
                                    q.params[1] if len(q.params) > 1 else "",
@@ -383,12 +391,9 @@ class PDKServer:
             elif cmd == "332":
                 self.state.on_332(q.params[1], q.params[2] if len(q.params) > 2 else "")
             elif cmd == "403":
-                # 403: params[0] is the channel (RFC1459: "403 #chan :No such channel")
-                self.state.on_403(q.params[0] if q.params else "")
+                self.state.on_403(q.params[1])
             elif cmd in ("433", "436", "437"):
-                # params[0] is the nick or channel ("433 nick :nickname in use" /
-                # "437 #chan :channel is in use")
-                p = q.params[0] if q.params else ""
+                p = q.params[1] if len(q.params) > 1 else ""
                 if re.match(r"^[#&!+]", p):
                     threading.Thread(target=self._delayed_join, args=(p,),
                                      daemon=True).start()
@@ -402,18 +407,11 @@ class PDKServer:
             self._send_to_clients(q)
             self._logger.logging(q)
             self.send_to_bot(q)
+            self._webui_push(q)
 
     def _recv_from_server(self, conn: Connection) -> IRCMessage:
         while True:
-            # bounded get so a shutdown (_exiting) is noticed within ~1s even
-            # while idle/connected upstream; raises PDKQuitProgram to unwind
-            # the server thread cleanly instead of waiting for the join.
-            try:
-                q = self._in_q.get(timeout=1.0)
-            except queue.Empty:
-                if self._exiting:
-                    raise E.PDKQuitProgram
-                continue
+            q = self._in_q.get()
             if q is None:  # EOF sentinel from reader
                 raise ConnectionClosed("upstream connection closed")
             if isinstance(q, tuple) and q[0] is EVENT:
@@ -445,14 +443,27 @@ class PDKServer:
             return q
 
     # ------------------------------------------------------------- helpers
+    def _capture_self_host(self, q) -> None:
+        # RPL_YOURHOST (002): params are [nick, "Your host is <host>"]
+        if q.params:
+            host = q.params[-1].split()[-1]
+            self.state.set_self_host(host)
+
     def join_to_channel(self, ch) -> None:
-        """Public join helper (used by state.on_403 auto-create)."""
         self._join_to_channel(ch)
 
     def _join_to_channel(self, ch) -> None:
-        chinfo = self._config.channel_info.get(ch)
-        if chinfo and chinfo.get("key"):
-            self.send_to_server(Command.join(ch, chinfo["key"]))
+        # Prefer the live-tracked key (MODE k), else the key from YAML config.
+        key = None
+        cs = self.state.current_channels.get(ch)
+        if cs is not None and cs.key:
+            key = cs.key
+        if key is None:
+            chinfo = self._config.channel_info.get(ch)
+            if chinfo and chinfo.get("key"):
+                key = chinfo["key"]
+        if key:
+            self.send_to_server(Command.join(ch, key))
         else:
             self.send_to_server(Command.join(ch))
 
@@ -530,16 +541,6 @@ class PDKServer:
 
     # ------------------------------------------------------------- events
     def invoke_event(self, name: str, *args) -> None:
-        if name in ("quit_program", "restart_program"):
-            # Global exit must take effect immediately: set _exiting and
-            # wake the main thread directly.  If these were routed through
-            # _in_q, the server thread would only consume them while it is
-            # in _recv_from_server -- during _sleep_reconnect that can be
-            # up to reconnect_delay seconds, so Ctrl+C / /PADOKA QUIT
-            # would appear to do nothing.
-            self._exiting = True
-            self._ctrl_q.put("quit" if name == "quit_program" else "restart")
-            return
         self._in_q.put((EVENT, name, *args))
 
     def _exec_event(self, ev) -> None:
@@ -551,8 +552,12 @@ class PDKServer:
             except Exception as e:
                 self._logger.slog("error occurred while reloading configuration")
                 self.ndk_error(e)
-        # NB: quit_program / restart_program never reach _exec_event; they are
-        # handled directly in invoke_event (immediate _exiting + _ctrl_q).
+        elif name == "quit_program":
+            self._exiting = True
+            self._ctrl_q.put("quit")
+        elif name == "restart_program":
+            self._exiting = True
+            self._ctrl_q.put("restart")
         elif name == "reconnect_to_server":
             self._connected = False
             raise E.PDKReconnectToServer
@@ -606,29 +611,23 @@ class PDKServer:
         if self._config.client_server_ssl_cert_file and \
                 self._config.client_server_ssl_key_file:
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            try:
-                ctx.load_cert_chain(self._config.client_server_ssl_cert_file,
-                                    self._config.client_server_ssl_key_file)
-            except (ssl.SSLError, OSError) as e:
-                # fail closed: TLS configured but unusable -> no listener
-                # (never fall back to plaintext silently)
-                self.ndk_error(RuntimeError("TLS certificate load failed: %s" % e))
-                return
+            ctx.load_cert_chain(self._config.client_server_ssl_cert_file,
+                                self._config.client_server_ssl_key_file)
 
-        # 1s accept timeout so the loop can poll _exiting and shut down
-        # promptly (a plain blocking accept() is not woken by close() from
-        # another thread on Linux, which delayed Ctrl+C shutdown).
-        srv.settimeout(1.0)
         try:
             while not self._exiting:
                 try:
                     csock, addr = srv.accept()
-                except (socket.timeout, TimeoutError):
-                    continue
                 except OSError:
                     break
+                if ctx:
+                    try:
+                        csock = ctx.wrap_socket(csock, server_side=True)
+                    except ssl.SSLError:
+                        csock.close()
+                        continue
                 threading.Thread(target=self._handle_client,
-                                 args=(csock, addr, ctx), daemon=True).start()
+                                 args=(csock, addr), daemon=True).start()
         finally:
             for cl in list(self._clients):
                 cl.kill()
@@ -638,24 +637,7 @@ class PDKServer:
                 pass
             self._logger.slog("Close Client Server Port")
 
-    # handshake timeout for newly accepted TLS clients; the handshake runs
-    # in the per-client thread so a stalled client can't block the accept loop
-    TLS_HANDSHAKE_TIMEOUT = 30
-
-    def _handle_client(self, sock, addr, ctx=None) -> None:
-        if ctx is not None:
-            sock.settimeout(self.TLS_HANDSHAKE_TIMEOUT)
-            try:
-                sock = ctx.wrap_socket(sock, server_side=True)
-            except OSError as e:
-                self._logger.slog(
-                    "TLS handshake failed with %s: %s" % (addr, e))
-                try:
-                    sock.close()
-                except OSError:
-                    pass
-                return
-            sock.settimeout(None)
+    def _handle_client(self, sock, addr) -> None:
         client = None
         try:
             if self._config.acl_object and \
@@ -726,11 +708,6 @@ class PDKServer:
             self._send_to_clients(cmd)
         self.state.clear_channels_member()
 
-    def send_to_clients(self, msg: IRCMessage) -> None:
-        """Public fan-out to all clients (used by the logger to broadcast
-        system lines)."""
-        self._send_to_clients(msg)
-
     def _send_to_clients(self, msg: IRCMessage) -> None:
         if msg.command == "PRIVMSG" and self._config.privmsg_filter_light:
             if not self._filter_message(self._config.privmsg_filter_light, msg):
@@ -766,16 +743,25 @@ class PDKServer:
         return arg[:1] == "\x01"
 
     def _ctcp_message_handler(self, msg) -> None:
-        m = re.match(r"^\x01(.+)\x01", msg.params[1])
+        m = re.match(r"^\x01([^\x01]+)\x01", msg.params[1])
         if not m:
             return
         ctcp = m.group(1)
-        if ctcp == "VERSION":
+        nick = self.nick_of(msg)
+        name, _, arg = ctcp.partition(" ")
+        name = name.upper()
+        if name == "VERSION":
             self.send_to_server(Command.notice(
-                self.nick_of(msg), "\x01VERSION " + self._version() + "\x01"))
-        elif ctcp == "TIME":
+                nick, "\x01VERSION " + self._version() + "\x01"))
+        elif name == "TIME":
             self.send_to_server(Command.notice(
-                self.nick_of(msg), "\x01TIME " + str(datetime.now()) + "\x01"))
+                nick, "\x01TIME " + str(datetime.now()) + "\x01"))
+        elif name == "ECHO":
+            self.send_to_server(Command.notice(
+                nick, "\x01ECHO %s %s\x01" % (nick, arg)))
+        elif name == "HELP":
+            self.send_to_server(Command.notice(
+                nick, "\x01HELP (VERSION|TIME|ECHO|HELP)\x01"))
 
     def _version(self) -> str:
         from . import VERSION

@@ -36,7 +36,7 @@ class TenkiBot(PDKBot):
         self._available_channel = re.compile(ac) if isinstance(ac, str) else (ac or re.compile(r".*"))
         self._timeout = float(self.bot_config.get("timeout", 15))
         self._area = {}
-        self._init_area()
+        self.run_async(self._init_area)
 
     def _fetch(self, url):
         req = urllib.request.Request(url, headers={"User-Agent": "PadokaTenkiBot/1.0"})
@@ -64,7 +64,9 @@ class TenkiBot(PDKBot):
         m = re.match(r"\Atenki>\s*(.*)$", msg)
         if not m:
             return
-        area = m.group(1).strip()
+        self.run_async(self._do_tenki, ch, m.group(1).strip())
+
+    def _do_tenki(self, ch, area):
         try:
             results = self._tenki(area)
         except Exception as e:

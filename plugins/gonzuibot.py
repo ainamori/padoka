@@ -44,7 +44,10 @@ class GonzuiBot(PDKBot):
             return
         m = re.match(r"\Agonzui(?:\:([\w\-\+]+))?>\s*(.+)", msg)
         if m:
-            self.send_notice(ch, "gonzui bot: %s" % self.result(m.group(1), m.group(2)))
+            self.run_async(self._do_result, ch, m.group(1), m.group(2))
+
+    def _do_result(self, ch, engine, word):
+        self.send_notice(ch, "gonzui bot: %s" % self.result(engine, word))
 
     def result(self, engine, key):
         engine = (engine or "raa").lower()

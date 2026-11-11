@@ -11,11 +11,12 @@ irssi や weechat などの通常の IRC クライアントから接続できま
 ## 機能
 
 - 上流 IRC サーバーへの自動再接続、ニックネーム衝突処理、PING/PONG ワッチドッグ
-- クライアントリスナー（**TLS** 対応、**SASL (PLAIN)** / PASS / NICK / USER 認証、MOTD、チャネル NAMES 再現）
+- クライアントリスナー（PASS/NICK/USER 認証、MOTD、チャネル NAMES 再現）
 - クライアント不在時の Away モード（ニックネーム変更も可能）
 - チャネル別 / システム / 個人チャット / デバッグ ログ（フォーマット可変）
 - メモリ内メッセージバックログ
 - Python ボットプラグイン（`on_privmsg`、`on_join`、`on_timer` など）
+- **WebUI**（ブラウザからログ閲覧・発言・ライブ表示。依存なし・stdlib のみ）
 - YAML 設定、Docker / docker-compose パッケージング
 
 ## クイックスタート（Docker なし）
@@ -25,8 +26,8 @@ pip install -e .
 padoka -c config/padoka.yml --debug
 ```
 
-IRC クライアントから `localhost:6667` に**TLS + SASL** で接続します
-（SASL のパスワード: `PadokaPassWord` = `client_server.pass`）。
+IRC クライアントから `localhost:6667` に接続します
+（パスワード: `PadokaPassWord`、ニックネーム/ユーザー名は任意）。
 
 ## Docker Compose で実行
 
@@ -36,50 +37,20 @@ docker compose up -d
 docker compose logs -f padoka     # 起動ログ確認
 ```
 
-### IRC クライアントで接続する（irssi の例、TLS + SASL）
+### IRC クライアントで接続する（irssi の例）
 
 ```bash
 irssi
-/SETTINGS SET -re save.sasl.mechanism PLAIN
-/SETTINGS SET -re save.sasl.username myuser
-/SETTINGS SET -re save.sasl.password PadokaPassWord   # client_server.pass と同じ
-/SAVE
-/conn -server 127.0.0.1 -port 6667 -ssl -sasl        # PADOKA_CLIENT_PORT と一致させる
-/#yourchannel                                         # channel_info で startup にしたチャネル
+/conn -server 127.0.0.1 -port 6667    # PADOKA_CLIENT_PORT と一致させる
+/PASS PadokaPassWord                  # client_server.pass と同じ
+/NICK myclient                        # 任意のニックネーム
+/USER myclient 0 * :myclient          # USER / hostname / servername / realname
+/#yourchannel                         # channel_info で startup にしたチャネル
 ```
-
-クライアントポートは TLS のみです。Docker イメージには自己署名証明書が
-焼き込まれているため、SSL 検証エラーが出たら指紋を登録するか（開発時のみ）
-`-ssl_verify=off` を使ってください。本番は CA 発行証明書へ差し替えを。
 
 接続すると現在参加中のチャネルのメンバー（353 NAMES）と TOPIC が再現され、
 往復メッセージやボットが動作します。本番デプロイの手順・よくある問題は
 [docs/deploy-checklist.md](docs/deploy-checklist.md) を参照してください。
-TLS / SASL の設定詳細は [docs/configuration.md](docs/configuration.md) を参照。
-
-### 上流 SASL（NickServ で登録済み nick を使う場合）
-
-上流 IRC ネットワークに SASL 認証で接続したい場合（ircnet では**海外からの
-接続に必須**、登録 nick の使用で推奨）は、`servers[]` に `sasl:` を追加します:
-
-```yaml
-servers:
-  - host: dev.ircnet.ne.jp
-    port: 6697
-    ssl_params:
-      verify: true
-    sasl:
-      username: padoka_py        # NickServ アカウント名
-      password: "<nickservパスワード>"
-```
-
-- NickServ アカウントの登録・パスワード設定手順: **irssi 等で ircnet に接続** →
-  `/msg NickServ register padoka_py <パスワード>`（新規）または
-  `/msg NickServ setpassword <パスワード>`（変更）。
-  `padoka -c config/padoka.yml --debug` のログに `SASL success (username=...)`
-  が出て 001 welcome が来れば成功です。
-- `password` が空だと警告を出して SASL をスキップします（匿名接続になる）。
-- 詳細（ircnet の地理制約を含む）: [docs/configuration.md](docs/configuration.md#上流-saslircv3-plain)
 
 ### ネットワーク構成
 
@@ -106,16 +77,35 @@ PADOKA_CLIENT_PORT=16667 docker compose up -d
 | [docs/deploy-checklist.md](docs/deploy-checklist.md) | 実 IRC 環境でのデプロイ / 検証チェックリスト |
 | [docs/configuration.md](docs/configuration.md) | 設定項目の詳細解説 |
 | [docs/bot-development.md](docs/bot-development.md) | ボットプラグイン開発ガイド |
+| [docs/webui.md](docs/webui.md) | **WebUI**（ブラウザからログ閲覧・発言） |
 | [docs/docker.md](docs/docker.md) | Docker / docker-compose 運用ガイド |
+| [docs/madoka-analysis.md](docs/madoka-analysis.md) | madoka 4.2.10（Perl 版）解析レポート（取り込み候補機能） |
+
+## WebUI
+
+標準ライブラリのみ（依存なし）の WebUI で、ブラウザからログ閲覧・発言できます。
+
+```yaml
+# config/padoka.yml
+webui:
+  enabled: true
+  host: 0.0.0.0
+  port: 8080
+  pass: "my-secret-token"   # 公開する場合は必ず設定
+```
+
+再起動して `http://<host>:8080/` を開きます。チャネル一覧・ライブ表示
+（SSE）・発言・join/part・nick 変更・生 IRC コマンド・リロード/再接続/終了
+に対応します。詳細と API は [docs/webui.md](docs/webui.md) を参照。
 
 ## ボットの作成
 
 `plugins/mybot.py` を作成します:
 
 ```python
-from padoka.bot import NDKBot
+from padoka.bot import PDKBot
 
-class MyBot(NDKBot):
+class MyBot(PDKBot):
     def on_privmsg(self, prefix, ch, msg):
         if msg.startswith("!hi"):
             self.send_notice(ch, "Hello, %s!" % prefix.nick)
@@ -229,6 +219,7 @@ IRC 経由でも制御できます:
 │   ├── bot.py         #   ボット基盤クラス
 │   ├── acl.py         #   アクセス制御リスト
 │   ├── notify.py      #   systemd sd_notify
+│   ├── webui.py       #   WebUI（HTTP + SSE + 組み込み UI）
 │   └── errors.py      #   例外階層
 ├── plugins/           # ボットプラグイン（.py）
 ├── config/            # 設定ファイル
@@ -246,7 +237,7 @@ IRC 経由でも制御できます:
 python tests/test_integration.py
 ```
 
-フェイク IRC サーバー + NDKServer + フェイククライアントを起動し、
+フェイク IRC サーバー + PDKServer + フェイククライアントを起動し、
 接続・ログイン・PONG・ボット応答・メッセージ転送・/PADOKA STATUS を確認します。
 
 ## CI
