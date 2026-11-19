@@ -217,6 +217,7 @@ docker stop padoka             # 正常終了 (SIGTERM)
 | `failed during tls handshake`（上記以外） | SNI/ホスト名不一致 → 指紋確認後に `check_hostname: false` も検討。中間ポートで TLS を剥がれている可能性（プロキシ環境） |
 | クライアントが TLS で接続できない | 証明書指紋の未登録（自己署名）/ `-ssl_verify=off`。ホスト側のポート公開 (`PADOKA_CLIENT_PORT`) / `client_server.acl` も確認 |
 | （クライアント側）SASL 認証で 907 が返る | `client_server.pass` とクライアント（irssi 等）側の SASL パスワード不一致 |
+| クライアントが 6667 に接続して**何も起きない・ログに痕跡がない** | `python3 scripts/diag_client.py -c config/padoka.yml` で判定。2 つの無痕跡切断経路: (1) **PASS 不一致** → `464` で切断（クライアントに /PASS を送る、SASL PLAIN でも可）(2) **TLS 専用ポートに平文で接続** → ハンドシェイク失敗で無言切断（`client_server.ssl_cert_file` 設定時はクライアントに -tls を要求）。なお padoka は単一ニック名プロキシのため、クライアントは固有 nick でネットワークに現れず自分で JOIN しない（上流 nick 名义で中継）のは設計どおり |
 | （上流側）`SASL failed` / 907 がログに出る | `servers[].sasl.password` が NickServ パスワードと不一致、または空（空なら「SASL configured but no password」の警告が出て SASL をスキップ）。正しい NickServ 認証情報を入力 |
 | `SASL: no server reply (905/904) within 60 seconds (last line: ... 020 ...)` | **古い padoka を使っている**（`CAP REQ :sasl` 交渉を行わない旧版では ircnet dev 等が 905 を返さず 020 でストールする）。最新版に更新（2026-11 以降、`CAP REQ` → `306` → `CAP END` → `AUTHENTICATE` の順で交渉する）。`python3 scripts/diag_upstream.py -c config/padoka.yml --cap` でサーバー側の SASL 提供・認証可否を切り分けできる |
 | ボットが動かない | `bots:` に name が入っているか / プラグインの読み込みエラーをログで確認 |
