@@ -313,9 +313,14 @@ def main() -> int:
                        stop_when=lambda t: cmd_of(t) in ("904", "906",
                                                           "907", "908",
                                                           "ERROR")
+                       or (cmd_of(t) == "903"
+                           and "success" in t.lower())
                        or t.startswith("<EOF")
                        or t.startswith("<closed"))
-                if any(cmd_of(t) == "904" for t in r):
+                # 904 (standard) or 903-with-success-text (ircnet dev)
+                if any(cmd_of(t) == "904" or
+                       (cmd_of(t) == "903" and "success" in t.lower())
+                       for t in r):
                     sasl_state = "ok"
                     sasl_ok = True
                 elif any(cmd_of(t) == "907" for t in r):
@@ -356,7 +361,9 @@ def main() -> int:
     time.sleep(0.3)
     sd("NICK " + str(nick))
     sd("USER %s 0 * :diag" % (user or "diag"))
-    r = rd(n=8, wait=6,
+    # The dev server holds each connection in "020 processing" for ~35s
+    # before the welcome arrives; wait generously for the 001.
+    r = rd(n=8, wait=45,
            stop_when=lambda t: " 001 " in " " + t or t.startswith("ERROR"))
     joined = any(" 001 " in " " + t for t in r)
     if joined:

@@ -412,7 +412,13 @@ class PDKServer:
                     sasl_sent = True
                     self._wait_deadline = time.time() + SASL_TIMEOUT
                     continue
-                if cmd == "904":
+                # ircnet (dev) signals SASL success with 903
+                # ("...SASL authentication successful") rather than the
+                # standard 904.  Accept 903 only when its text actually says
+                # so (a bare 903 is a mechanism list on some other networks),
+                # so standard networks are unaffected.
+                if cmd == "904" or (cmd == "903" and "success" in
+                                    (q.params[-1].lower() if q.params else "")):
                     sasl_stage = None
                     self._wait_deadline = None
                     self._logger.slog("SASL success (username=%s)." % sasl_user)
@@ -425,7 +431,8 @@ class PDKServer:
                 if cmd == "ERROR":
                     self._logger.slog("Server sent ERROR during login: %s" % q)
                     raise E.PDKReconnectToServer
-                # 903 (mechanism list), 909, notices, ... -> keep waiting
+                # other numerics (900, 903 mechanism list, 909, notices, ...)
+                # -> keep waiting
                 continue
             if cmd == "001":
                 break

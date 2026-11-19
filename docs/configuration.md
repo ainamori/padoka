@@ -173,8 +173,12 @@ padoka -c config/padoka.yml --debug
 ```
 
 padoka は NICK/USER を送る**前**に ircv3 の capability 交渉
-（`CAP REQ :sasl` → `306` ACK → `CAP END`）を行ったうえで
-`AUTHENTICATE PLAIN` を行い、904 (SASL: success) を確認してから登録します。
+（`CAP REQ :sasl` → ACK → `CAP END`）を行ったうえで
+`AUTHENTICATE PLAIN` を行い、SASL 成功通知を確認してから登録します。
+成功通知は標準の `904` (RPL_SASLSUCCESS) ですが、**ircnet dev は `903`
+（"SASL authentication successful"）を使う**ため、padoka は本文に
+success を含む 903 も成功として扱います（他のネットワークの 903 =
+機構リストには反応しません）。
 `CAP REQ` がないと一部のサーバー（ircnet の dev など）は 905 を送らず
 `020` でストールするため、この交渉は必須です。
 906/907/908（失敗）や ERROR が来たら原因をログに出して再接続します。
