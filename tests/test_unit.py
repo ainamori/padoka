@@ -323,7 +323,8 @@ check("_succ a -> b", _succ("mybota") == "mybotb")
 # ---------------------------------------------------------------------------
 section("Config channel-name helpers")
 import types  # noqa: E402
-from padoka.config import Config  # noqa: E402
+from padoka.config import (Config, _ascii_filename,  # noqa: E402
+                           _decode_ascii_filename)
 
 # Bind the real Config helpers to a lightweight object so we test the actual
 # implementation without constructing a full Config (which reads a YAML file).
@@ -338,6 +339,35 @@ check("canonical strips safe", c.canonical_channel_name("#Foo") == "#foo")
 fn = c.make_logfilename("${setting_name}-${channel_name}/%y%m%d.log", "#test", None)
 check("log filename has setting", fn.startswith("myset-"))
 check("log filename maps # -> CS-", "CS-test" in fn)
+# Non-ASCII (Japanese) channel names are written as Unicode code points
+# (uXXXX, letters+digits only) so the derived log directory is safe on any
+# Linux locale / filesystem and free of percent signs.
+fn_ja = c.make_logfilename("${setting_name}-${channel_name}/%y%m%d.log", "#日本語", None)
+check("log filename japanese code-point encoded",
+      "CS-u65e5u672cu8a9e" in fn_ja)
+check("log filename japanese no percent signs", "%" not in fn_ja)
+check("log filename japanese is pure ASCII",
+      all(ord(ch) < 128 for ch in fn_ja))
+# An explicit channel_name_in_file_name override gets the same safety.
+fn_cn = c.make_logfilename("${setting_name}-${channel_name}/%y%m%d.log",
+                           "#日本語", "日本語")
+check("log filename explicit cn code-point encoded",
+      "myset-u65e5u672cu8a9e" in fn_cn)
+
+# _ascii_filename: letters+digits only, reversible, literal-u disambiguated
+check("ascii-filename passthrough", _ascii_filename("CS-test") == "CS-test")
+check("ascii-filename kanji -> code points",
+      _ascii_filename("日本語") == "u65e5u672cu8a9e")
+check("ascii-filename literal-u escaped",
+      _ascii_filename("u65e5") == "u007565e5")
+check("ascii-filename astral surrogate pair",
+      _ascii_filename("😀") == "ud83dude00")
+check("ascii-filename round-trip kanji",
+      _decode_ascii_filename(_ascii_filename("#日本語")) == "#日本語")
+check("ascii-filename round-trip literal-u",
+      _decode_ascii_filename(_ascii_filename("u65e5")) == "u65e5")
+check("ascii-filename round-trip astral",
+      _decode_ascii_filename(_ascii_filename("a😀b")) == "a😀b")
 
 # ---------------------------------------------------------------------------
 section("safe_calc (arithmetic only, blocks injection)")

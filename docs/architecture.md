@@ -385,6 +385,11 @@ graph TD
   必ず `.get(ch)` を使い、**呼び出し（`channel_info(ch)`）しない**でください。
 - チャネル名の正規化: `identical_channel_name`（小文字化 + `[`→`{` 等）、
   `canonical_channel_name`（`!xxxxx` の安全チャネル部分を正規化）。
+- ログファイル名: `make_logfilename` が `${channel_name}` を生成。
+  先頭記号を `CS-`/`CA-`/`CE-`/`CP-` に、非 ASCII 文字（日本語など）を
+  Unicode 码点 `uXXXX`（英数字のみ）に置き換え、ディレクトリ名を
+  ロケール非依存の ASCII に保つ（`_ascii_filename` /
+  `_decode_ascii_filename` で元名に復元可）。
 - ボットは `plugins_dir` 配下の `.py` を `importlib` で動的ロードし、
   `PDKBot` の子类をインスタンス化します。
 

@@ -18,6 +18,7 @@ import os
 import queue
 import socket
 import ssl
+import struct
 import subprocess
 import sys
 import tempfile
@@ -317,6 +318,26 @@ channel_info:
         assert b"001" not in blob and b"Welcome" not in blob, \
             "plaintext client reached the IRC layer: %r" % blob
         print("[ok] plaintext client rejected (TLS alert/reset or 908)")
+
+        # regression (2026-11-19 LimeChat incident): a client that RESETS
+        # the TCP connection mid-TLS-handshake raised an unhandled
+        # ConnectionResetError in the accept-loop thread; its finally block
+        # then killed every attached client and closed the listener, so no
+        # new client could ever connect again.  The listener must survive.
+        rst = socket.create_connection(("127.0.0.1", client_port), timeout=5)
+        rst.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                       struct.pack("ii", 1, 0))
+        rst.close()  # linger(1, 0) -> abortive close (RST, not FIN)
+        time.sleep(0.5)  # let the accept loop hit the reset
+        probe = FakeClient(client_port, tls_cert=cert)
+        probe.send("PASS", "testpass")
+        probe.send("NICK", "rstprobe")
+        probe.send("USER", "rstprobe", "0", "0", ":rstprobe")
+        wp = probe.wait_for(lambda l: " 001 " in l, timeout=5.0)
+        assert wp, ("client port dead after mid-handshake RST -- "
+                    "accept-loop thread crashed (listener closed)")
+        print("[ok] client port survives a mid-handshake TCP RST")
+        probe.close()
 
         # a fake client logs in over TLS using SASL PLAIN (no /PASS)
         cl = FakeClient(client_port, tls_cert=cert)

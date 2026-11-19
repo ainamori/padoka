@@ -770,18 +770,35 @@ class PDKServer:
                     csock, addr = srv.accept()
                 except OSError:
                     break
-                if ctx:
-                    try:
+                # Per-connection setup must never raise out of this loop:
+                # the finally below kills every attached client and closes
+                # the listener, so one misbehaving peer would take the whole
+                # client port offline (2026-11-19 incident: a mid-handshake
+                # ConnectionResetError killed this thread).  Handshake
+                # failures are routine here: clients probe the TLS-only
+                # port in plaintext (ssl.SSLError) or abort the TCP
+                # connection mid-handshake (ConnectionResetError -- an
+                # OSError but NOT an ssl.SSLError; LimeChat reconnects do
+                # this).
+                try:
+                    if ctx:
                         csock = ctx.wrap_socket(csock, server_side=True)
-                    except ssl.SSLError:
-                        self._logger.slog(
-                            "Client TLS handshake failed from %s (the client "
-                            "port is TLS-only; connect with TLS, e.g. irssi "
-                            "-tls)." % (addr,))
-                        csock.close()
-                        continue
-                threading.Thread(target=self._handle_client,
-                                 args=(csock, addr), daemon=True).start()
+                    threading.Thread(target=self._handle_client,
+                                     args=(csock, addr), daemon=True).start()
+                except ssl.SSLError as e:
+                    self._logger.slog(
+                        "Client TLS handshake failed from %s: %s (the client "
+                        "port is TLS-only; connect with TLS, e.g. irssi "
+                        "-tls)." % (addr, e))
+                    self._drop_client_socket(csock)
+                except OSError as e:
+                    self._logger.slog(
+                        "Client dropped the connection during the TLS "
+                        "handshake from %s: %s" % (addr, e))
+                    self._drop_client_socket(csock)
+                except Exception as e:
+                    self.ndk_error(e)
+                    self._drop_client_socket(csock)
         finally:
             for cl in list(self._clients):
                 cl.kill()
@@ -790,6 +807,13 @@ class PDKServer:
             except OSError:
                 pass
             self._logger.slog("Close Client Server Port")
+
+    def _drop_client_socket(self, sock: socket.socket) -> None:
+        """Best-effort close of a raw/handshake socket (never raises)."""
+        try:
+            sock.close()
+        except (OSError, AttributeError):
+            pass
 
     def _handle_client(self, sock, addr) -> None:
         client = None

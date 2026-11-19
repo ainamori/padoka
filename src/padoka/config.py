@@ -61,6 +61,60 @@ TALK_LOG_MSG = {
 _RNAME = {"#": "CS-", "&": "CA-", "+": "CP-", "!": "CE-"}
 
 
+_HEX = frozenset("0123456789abcdefABCDEF")
+
+
+def _ascii_filename(s: str) -> str:
+    """Make a log-path component safe on any filesystem.
+
+    ASCII characters pass through unchanged so ordinary channel names stay
+    readable (``#test`` -> ``CS-test``). Each non-ASCII character (e.g. a
+    Japanese channel name) is written as its Unicode code point ``uXXXX``
+    (4 hex digits; UTF-16 surrogate pairs for astral characters), e.g.
+    ``#日本語`` -> ``CS-u65e5u672cu8a9e``. The result contains only letters
+    and digits, so the log directory never depends on the locale/terminal
+    encoding. A literal ``u`` directly followed by four hex digits in the
+    input is written as ``u0075`` so the mapping stays unambiguous and fully
+    reversible via :func:`_decode_ascii_filename`.
+    """
+    out: List[str] = []
+    for i, ch in enumerate(s):
+        cp = ord(ch)
+        if cp < 128:
+            if (ch == "u" and i + 4 < len(s)
+                    and all(c in _HEX for c in s[i + 1:i + 5])):
+                out.append("u0075")
+            else:
+                out.append(ch)
+        elif cp <= 0xFFFF:
+            out.append("u%04x" % cp)
+        else:  # astral (e.g. emoji): UTF-16 surrogate pair
+            cp -= 0x10000
+            out.append("u%04x" % (0xD800 + (cp >> 10)))
+            out.append("u%04x" % (0xDC00 + (cp & 0x3FF)))
+    return "".join(out)
+
+
+def _decode_ascii_filename(s: str) -> str:
+    """Inverse of :func:`_ascii_filename` (reconstructs the original name)."""
+    units = re.sub(r"u([0-9a-f]{4})",
+                   lambda m: chr(int(m.group(1), 16)), s)
+    out: List[str] = []
+    i = 0
+    while i < len(units):
+        c = units[i]
+        nxt = units[i + 1] if i + 1 < len(units) else ""
+        if (0xD800 <= ord(c) <= 0xDBFF
+                and 0xDC00 <= ord(nxt) <= 0xDFFF):
+            out.append(chr(0x10000 + ((ord(c) - 0xD800) << 10)
+                          + (ord(nxt) - 0xDC00)))
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def _default_log(loglevel: int) -> Dict[str, Any]:
     return {
         "file": "${setting_name}-${channel_name}/%y%m%d.log",
@@ -350,6 +404,12 @@ class Config:
             if m:
                 cn = _RNAME[m.group(0)] + cn[1:]
             cn = cn.translate(str.maketrans("*:/", "__I"))
+        # Keep the path component filesystem-safe: write any non-ASCII
+        # (e.g. Japanese) channel characters as Unicode code points
+        # (uXXXX, letters+digits only) so the derived log directory name
+        # never depends on the locale/terminal encoding. Applies to an
+        # explicit channel_name_in_file_name override too.
+        cn = _ascii_filename(cn)
         str_ = datetime.now().strftime(tmpl)
         str_ = str_.replace("${setting_name}", self.setting_name)
         str_ = re.sub(r"\$\{channel_name\}|\{ch\}", cn, str_)
