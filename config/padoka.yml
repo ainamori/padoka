@@ -11,20 +11,18 @@ padoka_server_name: PadokaProgram
 # ------------------------------------------------------------- クライアントサーバー
 client_server:
   host: null               # バインド対象インターフェース。null => 0.0.0.0
-  port: 6667               # null => リスニングしない
+  port: 3389               # null => リスニングしない
   pass: PadokaPassWord     # IRC クライアントが /PASS で送るパスワード
-  acl: null                # null => 全許可（デフォルト）
-  # ソースIPで制限する場合、上から順に判定（最初一致で確定。
-  # 一致しなければ許可）。 具体的な allow を deny all より前に書く。
-  # 例（LAN のみ許可）:
-  #   acl: |
-  #     allow 127.0.0.1
-  #     allow 192.168.0.0/24
-  #     allow 10.0.0.0/8
-  #     allow 172.16.0.0/12
-  #     deny all
-  # ssl_cert_file: cert.pem
-  # ssl_key_file: key.pem
+  # ソースIP制限（上から順に判定、最初一致で確定。どのルールにも一致
+  # しなければ「許可」になるため、白名单化するには末尾に deny all を必ず）。
+  # rlogin のポートフォワードでは接続の発生源が instance の内部 IP
+  # （10.128.0.0/9 帯）になるので、127.0.0.1 だけでは自分が入れなくなる。
+  acl: |
+    allow 127.0.0.1
+    allow 10.128.0.0/9
+    deny all
+  ssl_cert_file: config/certs/padoka.crt    # repo ルートから起動すればこの相対パスで可
+  ssl_key_file: config/certs/padoka.key
 
 # ------------------------------------------------------------- Web UI
 # ブラウザからログ閲覧・発言できる簡易 WebUI（stdlib のみ・依存なし）。
