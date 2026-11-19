@@ -152,17 +152,23 @@ def main():
         print("   %s" % note)
     if lines and _has(lines, "001"):
         print("   -> OK  ログイン成立 (001 受信)")
-        n_ch = sum(1 for l in lines if " 353 " in l)
-        if n_ch:
-            print("   -> 状態ダンプ: %d チャンネルを受信 (353)" % n_ch)
-            for l in lines:
-                if " 353 " in l:
-                    print("      %s" % l[:200])
+        if not any(" NICK " in " " + l for l in lines):
+            print("   -> 状態ダンプまだ未完了: padoka が上流登録を待っている")
+            print("      (最大30秒。上流接続が再接続中の実行ではここで待たれます)。")
+            print("      数分後に再実行すると JOIN/353 が来るはずです。")
         else:
-            print("   -> WARN  状態ダンプにチャンネルがない (353 受信なし)。")
-            print("      padoka は上流でどのチャンネルにも参加していない可能性が高い:")
-            print("      config の channel_info に対象チャンネルがあるか、上流ログに")
-            print("      'JOIN <ch>' / 353 が出ているかを確認してください。")
+            n_ch = sum(1 for l in lines if " 353 " in l)
+            if n_ch:
+                print("   -> 状態ダンプ: %d チャンネルを受信 (353)" % n_ch)
+                for l in lines:
+                    if " 353 " in l:
+                        print("      %s" % l[:200])
+            else:
+                print("   -> WARN  登録は完了したが状態ダンプにチャンネルがない")
+                print("      (353 受信なし)。padoka は上流でどのチャンネルにも")
+                print("      参加していない可能性が高い: config の channel_info に")
+                print("      対象チャンネルがあるか、上流ログに 'JOIN <ch>' / 353 が")
+                print("      出ているかを確認してください。")
         ok = True
     elif lines and _has(lines, "464"):
         print("   -> FAIL  464 Password Incorrect: PASS が一致しません")

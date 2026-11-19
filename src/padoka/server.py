@@ -774,6 +774,10 @@ class PDKServer:
                     try:
                         csock = ctx.wrap_socket(csock, server_side=True)
                     except ssl.SSLError:
+                        self._logger.slog(
+                            "Client TLS handshake failed from %s (the client "
+                            "port is TLS-only; connect with TLS, e.g. irssi "
+                            "-tls)." % (addr,))
                         csock.close()
                         continue
                 threading.Thread(target=self._handle_client,

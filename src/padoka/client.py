@@ -121,11 +121,22 @@ class PDKClient:
             elif msg.command == "AUTHENTICATE":
                 if not self._sasl_handle(msg):
                     return False
+            elif msg.command == "CAP":
+                # modern clients (irssi 1.x / weechat) always open the login
+                # with CAP REQ; not answering drops the connection before
+                # NICK/USER ever arrive
+                self._cap_handle(msg)
             else:
+                self.logger.slog(
+                    "Client login from %s aborted: unexpected command "
+                    "before NICK/USER: %s" % (self.remote_host, msg))
                 raise E.PDKError("Illegal login sequence: %s" % msg)
 
         if not self._sasl_authed and self.config.client_server_pass and \
                 self.config.client_server_pass != pass_:
+            self.logger.slog(
+                "Client login failed from %s: password incorrect "
+                "(client_server.pass mismatch)." % self.remote_host)
             self._send(self._rpl("464", nick, "Password Incorrect."))
             return False
 
@@ -292,6 +303,35 @@ class PDKClient:
         self.logger.slog("SASL failed from %s: %s" % (self.remote_host, reason))
         self._sasl_reply("907", "SASL: " + reason)
         return False
+
+    # ------------------------------------------------------------- CAP (ircv3)
+    # padoka offers at most the "sasl" capability (client_server.sasl).  The
+    # capability list a client requests (multi-prefix & co.) is not
+    # supported and is answered with a bare 302 / 306 that lists only what
+    # padoka provides.
+    def _cap_handle(self, msg: IRCMessage) -> None:
+        arg = (msg.params[0] if msg.params else "").upper()
+        sasl_on = self.config.client_server_sasl
+        if arg == "REQ":
+            requested = re.split(r"[\s,]+",
+                                 msg.params[1] if len(msg.params) > 1 else "")
+            if sasl_on and "sasl" in requested:
+                # 306 CAP * ACK :sasl
+                self._send(self._rpl("306", self._nick or "*", "CAP", "ACK",
+                                      ":sasl"))
+            elif sasl_on:
+                # sasl available but not requested: offer the list
+                self._send(self._rpl("302", self._nick or "*", "CAP", "LS",
+                                      ":sasl"))
+            else:
+                # nothing supported: empty list
+                self._send(self._rpl("302", self._nick or "*", "CAP", "LS", ":"))
+        elif arg in ("END", "NO", "DEL"):
+            pass  # nothing to answer
+        else:
+            # bare CAP: the client asks for the supported list
+            self._send(self._rpl("302", self._nick or "*", "CAP", "LS",
+                                  ":sasl" if sasl_on else ":"))
 
     def _sasl_reply(self, num: str, text: str) -> None:
         self._send(self._rpl(num, self._nick or "*", text))

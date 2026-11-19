@@ -45,12 +45,17 @@ class Connection:
         self._tls: Optional[ssl.SSLSocket] = None
         self._buf = b""
         self._reader: Optional[threading.Thread] = None
-        self._send_lock = threading.Lock()
         self._flood_lock = threading.Lock()
         self._flood_start = 0.0
         self._flood_chars = 0
         self._flood_lines = 0
         self._closed = threading.Event()
+        # Serializes ALL socket I/O: an SSLSocket must not be read and
+        # written from different threads concurrently (OpenSSL is not
+        # thread-safe per-connection; the race loses records and can even
+        # abort the process).  The reader thread polls non-blocking under
+        # this lock; senders take it briefly around sendall.
+        self._io_lock = threading.Lock()
         # diagnostics: what happened last (read by the server thread when the
         # connection drops, so the reason shows up in the log)
         self.last_error: Optional[str] = None
@@ -94,11 +99,19 @@ class Connection:
         # the server thread for minutes; raises OSError -> clean reconnect.
         raw = socket.create_connection((self.host, self.port),
                                        timeout=self.CONNECT_TIMEOUT)
-        raw.settimeout(None)  # reader loop wants blocking I/O
         self._sock = raw
         if self.ssl_params:
             ctx = self.build_ssl_context()
+            # handshake on the (still blocking) socket, then switch to
+            # non-blocking: the reader polls under _io_lock, so a long
+            # idle recv never blocks a sender (see _read_loop / send)
             self._tls = ctx.wrap_socket(raw, server_hostname=self.host)
+            # NB: wrap_socket() dups the fd into the SSLSocket and closes
+            # the original object -- set non-blocking on _tls, not on raw.
+            self._tls.setblocking(False)
+        else:
+            self._tls = None
+            raw.setblocking(False)
         self._buf = b""
         self._closed.clear()
         self._start_reader()
@@ -111,8 +124,11 @@ class Connection:
     def _read_loop(self) -> None:
         try:
             while not self._closed.is_set():
-                data = self._recv(4096)
-                if not data:
+                data = self._poll_recv()
+                if data is None:      # no data yet (non-blocking poll)
+                    time.sleep(0.01)
+                    continue
+                if data == b"":       # EOF / closed
                     break
                 self._buf += data
                 while b"\n" in self._buf:
@@ -124,12 +140,21 @@ class Connection:
             self.queue.put(None)  # EOF sentinel
             self._closed.set()
 
-    def _recv(self, n: int) -> bytes:
-        if self._tls is not None:
-            return self._tls.recv(n)
-        if self._sock is None:
-            return b""
-        return self._sock.recv(n)
+    def _poll_recv(self) -> Optional[bytes]:
+        """One non-blocking recv under the io lock.
+
+        Returns the bytes received, None when no data is available yet,
+        or b"" when the connection is closed/EOF.
+        """
+        with self._io_lock:
+            sock = self._tls if self._tls is not None else self._sock
+            if sock is None or self._closed.is_set():
+                return b""
+            try:
+                return sock.recv(4096)
+            except (BlockingIOError, ssl.SSLWantReadError,
+                    socket.timeout):
+                return None
 
     def _handle_line(self, line: bytes) -> None:
         try:
@@ -141,13 +166,14 @@ class Connection:
 
     def close(self) -> None:
         self._closed.set()
-        for s in (self._tls, self._sock):
-            try:
-                if s is not None:
-                    s.close()
-            except OSError:
-                pass
-        self._tls = self._sock = None
+        with self._io_lock:
+            for s in (self._tls, self._sock):
+                try:
+                    if s is not None:
+                        s.close()
+                except OSError:
+                    pass
+            self._tls = self._sock = None
 
     @property
     def closed(self) -> bool:
@@ -155,16 +181,18 @@ class Connection:
 
     def tls_info(self) -> Optional[str]:
         """Human-readable TLS state of this connection, or None if plaintext."""
-        if self._tls is None:
-            return None
-        try:
-            ver = self._tls.version()
-        except Exception:
-            ver = "?"
-        try:
-            cert = self._tls.getpeercert()
-        except Exception:
-            cert = {}
+        with self._io_lock:
+            tls = self._tls
+            if tls is None:
+                return None
+            try:
+                ver = tls.version()
+            except Exception:
+                ver = "?"
+            try:
+                cert = tls.getpeercert()
+            except Exception:
+                cert = {}
         if cert:
             return "TLS %s, cert expires %s" % (ver, cert.get("notAfter", "?"))
         return "TLS %s (unverified)" % ver
@@ -201,38 +229,21 @@ class Connection:
         data = msg.to_s().encode("utf-8", errors="replace")
         if msg.command in ("PRIVMSG", "NOTICE"):
             self._flood_throttle(msg, len(data))
-        with self._send_lock:
-            if self._sock is None or self.closed:
+        # non-blocking socket: sendall() is replaced by a retrying send()
+        # under the io lock (concurrent SSL read/write is unsafe).  The
+        # retries only spin while the send buffer is full (backpressure).
+        with self._io_lock:
+            sock = self._tls if self._tls is not None else self._sock
+            if sock is None or self.closed:
                 return
-            try:
-                if self._tls is not None:
-                    self._tls.sendall(data)
-                else:
-                    self._sock.sendall(data)
-            except OSError:
-                self._closed.set()
-
-    # -- blocking receive used by client handlers --------------------------
-    def recv_line(self, timeout: Optional[float] = None) -> Optional[bytes]:
-        """Blocking read of one full line (used by the client side)."""
-        deadline = None if timeout is None else time.time() + timeout
-        while b"\n" not in self._buf:
-            remaining = None
-            if deadline is not None:
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    return None
-            try:
-                if self._tls is not None:
-                    data = self._tls.recv(4096)
-                elif self._sock is not None:
-                    data = self._sock.recv(4096)
-                else:
-                    return None
-            except OSError:
-                return None
-            if not data:
-                return None
-            self._buf += data
-        line, self._buf = self._buf.split(b"\n", 1)
-        return line
+            view = memoryview(data)
+            while view:
+                try:
+                    sent = sock.send(view)
+                except (BlockingIOError, ssl.SSLWantWriteError):
+                    time.sleep(0.01)
+                    continue
+                except OSError:
+                    self._closed.set()
+                    return
+                view = view[sent:]

@@ -70,12 +70,22 @@ class FakeIRCServer(threading.Thread):
         self.conn = conn
         self.conn.settimeout(10)
         f = self.conn.makefile("rb")
-        # keep a PING timer going
-        threading.Thread(target=self._ping_loop, daemon=True).start()
-        for line in f:
-            text = line.decode("utf-8", "replace").strip()
-            self.received.append(text)
-            self._handle(text)
+        # keep a PING timer going -- but only on plaintext sockets: an
+        # SSLSocket must not be read (makefile loop) and written (PING)
+        # from two threads concurrently, or TLS records get corrupted
+        if not self.tls_cert:
+            threading.Thread(target=self._ping_loop, daemon=True).start()
+        try:
+            for line in f:
+                text = line.decode("utf-8", "replace").strip()
+                self.received.append(text)
+                self._handle(text)
+        except (OSError, TimeoutError):
+            pass  # client closed or idle timeout: normal for a fake server
+        except Exception:
+            import traceback
+            print("DBG FakeIRCServer thread died unexpectedly:")
+            traceback.print_exc()
 
     def _ping_loop(self):
         for _ in range(3):
@@ -327,6 +337,23 @@ channel_info:
         w2 = cl2.wait_for(lambda l: " 001 " in l)
         assert w2, "/PASS-over-TLS client did not receive 001 welcome"
         print("[ok] /PASS over TLS client received 001 welcome")
+
+        # irssi 1.x style: CAP REQ is sent BEFORE NICK/USER; old padoka
+        # answered with "Illegal login sequence" and dropped the connection
+        # (clients saw no welcome / no channels at all).
+        cl4 = FakeClient(client_port, tls_cert=cert)
+        cl4.send("CAP", "REQ", ":multi-prefix extended-join")
+        cap_r = cl4.wait_for(lambda l: " 302 " in l or " 306 " in l,
+                             timeout=5.0)
+        assert cap_r, "CAP REQ was not answered with 302/306"
+        cl4.send("CAP", "END")
+        cl4.send("PASS", "testpass")
+        cl4.send("NICK", "capclient")
+        cl4.send("USER", "capclient", "0", "0", ":capclient")
+        w4 = cl4.wait_for(lambda l: " 001 " in l)
+        assert w4, "CAP-speaking client did not receive 001 welcome"
+        print("[ok] CAP-speaking client (irssi 1.x style) logged in:", w4)
+        cl4.close()
 
         # SASL with a wrong password must fail with 907
         cl3 = FakeClient(client_port, tls_cert=cert)
