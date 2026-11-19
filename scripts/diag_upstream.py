@@ -13,6 +13,7 @@
 使いかた:
     python3 scripts/diag_upstream.py -c config/padoka.yml
     python3 scripts/diag_upstream.py -c config/padoka.yml --no-sasl   # SASL なし登録だけ
+    python3 scripts/diag_upstream.py -c config/padoka.yml --cap       # SASL 前に CAP REQ :sasl を交渉
     python3 scripts/diag_upstream.py --host dev.ircnet.ne.jp --port 6697 --user NAME --pass PW
 
 終了コード: 0 = 登録完了(001), 1 = 失敗, 2 = 引数エラー
@@ -50,6 +51,12 @@ def main() -> int:
     ap.add_argument("--sasl-wait", type=float, default=30.0,
                     help="seconds to wait for the 905 SASL continuation "
                          "prompt after AUTHENTICATE PLAIN (default 30)")
+    ap.add_argument("--cap", action="store_true",
+                    help="first do the ircv3 capability negotiation "
+                         "(CAP REQ :sasl, wait for 306) before "
+                         "AUTHENTICATE. Standard clients (irssi/weechat) "
+                         "always do this; use it when the server answers "
+                         "020 but never 905 without it")
     args = ap.parse_args()
 
     # --- resolve parameters ------------------------------------------------
@@ -241,9 +248,37 @@ def main() -> int:
             def ts():
                 return "[%5.1fs]" % (time.time() - t0)
 
-            print("3) SASL : AUTHENTICATE PLAIN (user=%s)" % user)
-            sd("AUTHENTICATE PLAIN")
-            sasl_state = "waiting905"
+            # Optional ircv3 capability negotiation before SASL.
+            # Standard clients (irssi/weechat) always send CAP REQ :sasl
+            # first and wait for 306 CAP ... ACK; per RFC 7431 a server
+            # may refuse to start the SASL exchange without it.  If the
+            # server only ever answers 020 (no 905) without --cap but
+            # works with --cap, that is the root cause.
+            if args.cap:
+                print("3) CAP  : CAP REQ :sasl (ircv3 negotiation)")
+                sd("CAP REQ :sasl")
+                cap_acked = False
+                end_cap = time.time() + 10.0
+                while not cap_acked and time.time() < end_cap:
+                    t = read_bounded(min(2.0, end_cap - time.time()))
+                    if t is None:
+                        continue
+                    if t == "":
+                        print("     R| <EOF: connection closed by server>")
+                        sasl_state = "closed"
+                        break
+                    print("     R| %s" % t[:200])
+                    if cmd_of(t) == "306":
+                        cap_acked = True
+                if sasl_state != "closed":
+                    print("   -> CAP %s" % ("ACK (306) received"
+                                             if cap_acked else
+                                             "306 did not arrive within 10s "
+                                             "(continuing to SASL)"))
+            if sasl_state != "closed":
+                print("3) SASL : AUTHENTICATE PLAIN (user=%s)" % user)
+                sd("AUTHENTICATE PLAIN")
+                sasl_state = "waiting905"
             # Wait ONLY for the 905 continuation prompt (or an immediate
             # 904/907/908/ERROR).  Never send the token unprompted -- doing
             # so aborts the server's connection processing.
