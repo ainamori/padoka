@@ -152,6 +152,17 @@ def main():
         print("   %s" % note)
     if lines and _has(lines, "001"):
         print("   -> OK  ログイン成立 (001 受信)")
+        n_ch = sum(1 for l in lines if " 353 " in l)
+        if n_ch:
+            print("   -> 状態ダンプ: %d チャンネルを受信 (353)" % n_ch)
+            for l in lines:
+                if " 353 " in l:
+                    print("      %s" % l[:200])
+        else:
+            print("   -> WARN  状態ダンプにチャンネルがない (353 受信なし)。")
+            print("      padoka は上流でどのチャンネルにも参加していない可能性が高い:")
+            print("      config の channel_info に対象チャンネルがあるか、上流ログに")
+            print("      'JOIN <ch>' / 353 が出ているかを確認してください。")
         ok = True
     elif lines and _has(lines, "464"):
         print("   -> FAIL  464 Password Incorrect: PASS が一致しません")
@@ -182,6 +193,10 @@ def main():
                 print("   R| %s" % l[:200])
             if lines2 and _has(lines2, "001"):
                 print("   -> OK  TLS でログイン成立 (001 受信)")
+                n_ch = sum(1 for l in lines2 if " 353 " in l)
+                print("   -> 状態ダンプ: %d チャンネルを受信 (353)" % n_ch
+                      if n_ch else
+                      "   -> WARN  状態ダンプにチャンネルがない (353 受信なし)。")
                 ok = True
                 print("   クライアントは TLS で接続する必要があります。例 (irssi):")
                 print("       /SERVER ADD -tls -notls_verify %s %d %s"
