@@ -366,7 +366,13 @@ class PDKServer:
             if sasl_stage is not None:
                 p0 = q.params[0] if q.params else ""
                 if sasl_stage == "cap":
-                    if cmd == "306":  # CAP ... ACK
+                    # Cap replies come in two legal forms: numeric
+                    # ("306 CAP ACK :sasl") or string ("CAP * ACK :sasl").
+                    # ircnet dev uses the string form; both must be handled.
+                    cap_reply = p0
+                    if cmd == "CAP" and len(q.params) > 1:
+                        cap_reply = q.params[1].upper()
+                    if cap_reply == "ACK":
                         conn.send(Command.cap_end())
                         # RFC 7431: the mechanism exchange is initiated by
                         # the client with AUTHENTICATE, after CAP END.
@@ -374,9 +380,12 @@ class PDKServer:
                         self._logger.slog(
                             "SASL: sasl capability acknowledged; "
                             "CAP END + AUTHENTICATE PLAIN sent.")
+                        # fresh deadline for the AUTHENTICATE phase: the
+                        # dev server can spend 30s+ in "020 processing".
+                        self._wait_deadline = time.time() + SASL_TIMEOUT
                         sasl_stage = "auth"
                         continue
-                    if cmd == "308":  # CAP ... NO (sasl not offered)
+                    if cap_reply == "NO":  # 308 / CAP * NO
                         self._logger.slog(
                             "WARNING: server did not offer the sasl capability; "
                             "falling back to unauthenticated login (refused by "
@@ -384,7 +393,7 @@ class PDKServer:
                         sasl_stage = None
                         self._register(conn)
                         continue
-                    # 301 (CAP LS), 020, notices, ... -> keep waiting for 306/308
+                    # 301 (CAP LS), 020, notices, ... -> keep waiting for ACK/NO
                     continue
                 # sasl_stage == "auth"
                 if cmd == "301":
@@ -394,11 +403,14 @@ class PDKServer:
                     # some servers use `AUTHENTICATE +` for continuation
                     conn.send(Command.authenticate(self._sasl_payload))
                     sasl_sent = True
+                    self._wait_deadline = time.time() + SASL_TIMEOUT
                     continue
                 if cmd == "905" and not sasl_sent:
                     # 905: `SASL: +` continuation
                     conn.send(Command.authenticate(self._sasl_payload))
+                    self._logger.dlog("[login] AUTHENTICATE <token> sent")
                     sasl_sent = True
+                    self._wait_deadline = time.time() + SASL_TIMEOUT
                     continue
                 if cmd == "904":
                     sasl_stage = None

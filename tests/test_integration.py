@@ -97,9 +97,11 @@ class FakeIRCServer(threading.Thread):
         if cmd == "CAP":
             p0 = p[0].upper() if p else ""
             if p0 == "REQ":
-                self._send(":fake 306 CAP ACK :sasl")
+                # string-form replies ("CAP * ACK :sasl") like real ircnet
+                # dev servers send; padoka must handle both forms
+                self._send(":fake CAP * ACK :sasl")
             elif p0 == "END":
-                self._send(":fake 301 CAP LS :sasl")
+                self._send(":fake CAP * LS :sasl")
         elif cmd == "AUTHENTICATE":
             if not p or p[0] == "PLAIN":
                 self._send(":fake 905 %s :SASL: +" % PADOKA_NICK)
