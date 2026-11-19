@@ -40,7 +40,16 @@ class PDKClient:
         self._state = manager.state
         self.sock = sock
         self.sock.settimeout(self.IO_POLL_TIMEOUT)
-        self.remote_host: str = sock.getpeername()[0]
+        try:
+            self.remote_host: str = sock.getpeername()[0]
+        except OSError:
+            # The peer may have RST the connection right after the TLS
+            # handshake (scanners typically never read the TLS 1.3
+            # NewSessionTicket, so their close() sends RST, not FIN).
+            # The socket is already dead, but the login/teardown path
+            # still needs an address for logging; the first recv() will
+            # surface the reset and _login() ends cleanly.
+            self.remote_host = "?"
         self.queue: "queue.Queue" = queue.Queue()
         self._buf = b""
         self.connected = False
@@ -127,10 +136,14 @@ class PDKClient:
                 # NICK/USER ever arrive
                 self._cap_handle(msg)
             else:
+                # probe/scanner traffic (HTTP GET, raw bytes, ...): the slog
+                # above is the single record of this; just drop the
+                # connection.  Raising PDKError used to double-log it as a
+                # full "Illegal login sequence" backtrace on every probe.
                 self.logger.slog(
                     "Client login from %s aborted: unexpected command "
                     "before NICK/USER: %s" % (self.remote_host, msg))
-                raise E.PDKError("Illegal login sequence: %s" % msg)
+                return False
 
         if not self._sasl_authed and self.config.client_server_pass and \
                 self.config.client_server_pass != pass_:
@@ -390,10 +403,20 @@ class PDKClient:
             except OSError:
                 return None
             if not data:
-                # EOF: return any trailing partial line, else None
+                # EOF: return any trailing partial line, else None.
+                # Step (1) drains ALL complete lines, so at EOF the buffer
+                # holds at most a fragment WITHOUT a newline; unconditionally
+                # splitting into two values raised
+                # "ValueError: not enough values to unpack" (2026-11-19:
+                # scanner sent a line without CRLF, then dropped the
+                # connection).
                 if self._buf:
-                    line, self._buf = self._buf.split(b"\n", 1)
-                    return self._parse_line(line)
+                    if b"\n" in self._buf:
+                        line, self._buf = self._buf.split(b"\n", 1)
+                    else:
+                        line, self._buf = self._buf, b""
+                    if line.strip():
+                        return self._parse_line(line)
                 return None
             self._buf += data
         return None

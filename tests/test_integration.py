@@ -339,6 +339,47 @@ channel_info:
         print("[ok] client port survives a mid-handshake TCP RST")
         probe.close()
 
+        # regression (2026-11-19 scanner probes): raw non-IRC traffic on the
+        # TLS client port must not crash the handler thread.  Two shapes
+        # seen in the wild:
+        #   (a) a line sent WITHOUT a trailing CRLF, then the connection
+        #       dropped -- the EOF branch of _recv_from_client assumed the
+        #       leftover buffer contained a newline and raised
+        #       "ValueError: not enough values to unpack";
+        #   (b) a complete non-IRC line (HTTP GET) -- used to be logged
+        #       twice: once as the abort slog, once as a full PDKError
+        #       "Illegal login sequence" backtrace.
+        def _raw_probe(payload: bytes) -> None:
+            s = socket.create_connection(("127.0.0.1", client_port),
+                                         timeout=5)
+            c = ssl.create_default_context()
+            c.check_hostname = False
+            c.verify_mode = ssl.CERT_NONE
+            s = c.wrap_socket(s, server_hostname="localhost")
+            s.settimeout(1)
+            s.sendall(payload)
+            s.close()
+
+        _raw_probe(b"NICK halfnick")           # (a) no CRLF, then EOF
+        time.sleep(0.5)
+        _raw_probe(b"GET / HTTP/1.1\r\n")      # (b) complete non-IRC line
+        time.sleep(0.5)
+        syslog = os.path.join(tmpdir, "log", "pytest-system.log")
+        with open(syslog, encoding="utf-8") as fh:
+            syslog_text = fh.read()
+        assert "not enough values to unpack" not in syslog_text, \
+            "partial line + EOF crashed the client handler (ValueError)"
+        assert "aborted: unexpected command" in syslog_text, \
+            "HTTP probe abort was not recorded in the system log"
+        assert "Illegal login sequence" not in syslog_text, \
+            "HTTP probe was double-logged as a PDKError backtrace"
+        # the probes' close() sends RST (unread TLS 1.3 NewSessionTicket),
+        # which used to kill the handler in getpeername() with ENOTCONN
+        assert "Transport endpoint is not connected" not in syslog_text, \
+            "post-handshake RST crashed the client handler (getpeername)"
+        print("[ok] raw non-IRC probes (no-CRLF EOF / HTTP GET) handled "
+              "without exceptions")
+
         # a fake client logs in over TLS using SASL PLAIN (no /PASS)
         cl = FakeClient(client_port, tls_cert=cert)
         assert cl.sasl_plain("testpass"), "SASL PLAIN authentication failed"
