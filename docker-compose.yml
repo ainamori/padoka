@@ -4,8 +4,10 @@
 #
 # ネットワークについて:
 #   * デフォルトは bridge。IRC クライアントポートをホストに公開します。
-#     6667 が使用中の場合は PADOKA_CLIENT_PORT で変更:
+#     ポートを変更する場合（config の client_server.port と一致させる）:
 #         PADOKA_CLIENT_PORT=16667 docker compose up -d
+#     ホスト側だけ別ポートにする場合（コンテナ内は 6667 のまま）:
+#         PADOKA_CLIENT_HOST_PORT=16667 docker compose up -d
 #   * ホストに直接バインド（NAT なし）する場合は
 #     docker-compose.host.yml（network_mode: host）を使用。
 
@@ -20,17 +22,20 @@ services:
     environment:
       PADOKA_CONFIG: /app/config/padoka.yml
       TZ: ${TZ:-UTC}
+      # healthcheck が読むコンテナ内ポート（= config の client_server.port）
+      PADOKA_CLIENT_PORT: "${PADOKA_CLIENT_PORT:-6667}"
     # クライアント（irssi 等）が接続するポート。
-    # YAML の client_server.port と一致させる（デフォルト 6667）。
+    # PADOKA_CLIENT_PORT = コンテナ内ポート（YAML の client_server.port と
+    # 一致させる、デフォルト 6667）。PADOKA_CLIENT_HOST_PORT = ホスト側ポート
+    # （未設定なら PADOKA_CLIENT_PORT と同じ 1:1 マッピング）。
     ports:
-      - "${PADOKA_CLIENT_PORT:-6667}:6667/tcp"
+      - "${PADOKA_CLIENT_HOST_PORT:-${PADOKA_CLIENT_PORT:-6667}}:${PADOKA_CLIENT_PORT:-6667}/tcp"
       # WebUI のポート。config/padoka.yml の webui.enabled: true で有効化。
       # PADOKA_WEBUI_PORT で公開ポートを変更可能（デフォルト 8080）。
       - "${PADOKA_WEBUI_PORT:-8080}:8080/tcp"
-    # 生存判定: クライアントポート(6667)が accept できれば healthy。
-    # YAML で client_server.port を変えた場合は 6667 も合わせて更新すること。
+    # 生存判定: クライアントポートが accept できれば healthy。
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 6667), 3)"]
+      test: ["CMD", "python", "-c", "import os,socket; socket.create_connection(('127.0.0.1', int(os.environ.get('PADOKA_CLIENT_PORT','6667'))), 3)"]
       interval: 30s
       timeout: 5s
       retries: 3

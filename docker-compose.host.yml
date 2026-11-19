@@ -18,12 +18,14 @@ services:
     environment:
       PADOKA_CONFIG: /app/config/padoka.yml
       TZ: ${TZ:-UTC}
+      # healthcheck が読むポート（= config の client_server.port）
+      PADOKA_CLIENT_PORT: "${PADOKA_CLIENT_PORT:-6667}"
     # host ネットワークのためポート公開は不要。
-    # IRC クライアントは 6667、WebUI（有効化時）は 8080 に直接バインドされる。
-    # 生存判定: クライアントポート(6667)が accept できれば healthy。
-    # YAML で client_server.port を変えた場合は 6667 も合わせて更新すること。
+    # IRC クライアントは client_server.port（デフォルト 6667）、WebUI
+    # （有効化時）は 8080 に直接バインドされる。
+    # 生存判定: クライアントポートが accept できれば healthy。
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 6667), 3)"]
+      test: ["CMD", "python", "-c", "import os,socket; socket.create_connection(('127.0.0.1', int(os.environ.get('PADOKA_CLIENT_PORT','6667'))), 3)"]
       interval: 30s
       timeout: 5s
       retries: 3
