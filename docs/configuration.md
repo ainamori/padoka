@@ -166,14 +166,20 @@ padoka -c config/padoka.yml --debug
 正常ならこの順のログが出ます:
 
 ```
-[PDK] SASL PLAIN started (username=padoka_py).
+[PDK] SASL: CAP REQ :sasl sent (username=padoka_py).
+[PDK] SASL: sasl capability acknowledged; CAP END + AUTHENTICATE PLAIN sent.
 [PDK] SASL success (username=padoka_py).
 [<S] ... command='001' ...          <- welcome（登録完了）
 ```
 
-padoka は NICK/USER を送る**前**に `AUTHENTICATE PLAIN`（ircv3）を行い、
-904 (SASL: success) を確認してから登録します。906/907/908（失敗）や
-ERROR が来たら原因をログに出して再接続します。
+padoka は NICK/USER を送る**前**に ircv3 の capability 交渉
+（`CAP REQ :sasl` → `306` ACK → `CAP END`）を行ったうえで
+`AUTHENTICATE PLAIN` を行い、904 (SASL: success) を確認してから登録します。
+`CAP REQ` がないと一部のサーバー（ircnet の dev など）は 905 を送らず
+`020` でストールするため、この交渉は必須です。
+906/907/908（失敗）や ERROR が来たら原因をログに出して再接続します。
+`308`（sasl capability をサーバーが提供しない）場合は警告を出して
+非認証ログインへフォールバックします（海外からの ircnet 接続は拒否されます）。
 
 **セキュリティ注意**
 

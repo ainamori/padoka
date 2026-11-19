@@ -94,7 +94,13 @@ class FakeIRCServer(threading.Thread):
         m = IRCMessage.parse(text + "\r\n")
         cmd = m.command
         p = m.params
-        if cmd == "AUTHENTICATE":
+        if cmd == "CAP":
+            p0 = p[0].upper() if p else ""
+            if p0 == "REQ":
+                self._send(":fake 306 CAP ACK :sasl")
+            elif p0 == "END":
+                self._send(":fake 301 CAP LS :sasl")
+        elif cmd == "AUTHENTICATE":
             if not p or p[0] == "PLAIN":
                 self._send(":fake 905 %s :SASL: +" % PADOKA_NICK)
             else:

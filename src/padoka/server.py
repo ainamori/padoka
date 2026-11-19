@@ -332,7 +332,12 @@ class PDKServer:
         #       username: mynick
         #       password: nickserv_password
         sasl = self._server_sasl
-        sasl_done = sasl is None
+        # SASL state: None = no SASL (or already finished) | "cap" = waiting
+        # for the capability ACK | "auth" = AUTHENTICATE exchange in flight.
+        # RFC 7431 requires the sasl capability to be negotiated (CAP REQ)
+        # before AUTHENTICATE; without it some servers (e.g. ircnet dev)
+        # never send the 905 prompt and the login stalls on 020.
+        sasl_stage = None
         sasl_sent = False
         sasl_user = None
         if sasl and not sasl.get("password"):
@@ -341,16 +346,16 @@ class PDKServer:
                 "WARNING: SASL configured for %s but no password set; "
                 "skipping SASL (set servers[].sasl.password)." % conn.host)
             sasl = None
-            sasl_done = True
         if sasl:
             sasl_user = str(sasl.get("username") or self._config.user)
             password = str(sasl.get("password") or "")
             self._sasl_payload = sasl_plain_payload(sasl_user, password)
-            conn.send(Command.authenticate("PLAIN"))
-            self._logger.slog("SASL PLAIN started (username=%s)." % sasl_user)
+            conn.send(Command.cap_req("sasl"))
+            self._logger.slog("SASL: CAP REQ :sasl sent (username=%s)." % sasl_user)
+            sasl_stage = "cap"
             self._wait_deadline = time.time() + SASL_TIMEOUT
 
-        if not sasl:
+        if sasl_stage is None:
             self._register(conn)
 
         # wait for welcome
@@ -358,8 +363,33 @@ class PDKServer:
             q = self._recv_from_server(conn)
             cmd = q.command
             self._logger.dlog("[login] %s" % q)
-            if not sasl_done:
+            if sasl_stage is not None:
                 p0 = q.params[0] if q.params else ""
+                if sasl_stage == "cap":
+                    if cmd == "306":  # CAP ... ACK
+                        conn.send(Command.cap_end())
+                        # RFC 7431: the mechanism exchange is initiated by
+                        # the client with AUTHENTICATE, after CAP END.
+                        conn.send(Command.authenticate("PLAIN"))
+                        self._logger.slog(
+                            "SASL: sasl capability acknowledged; "
+                            "CAP END + AUTHENTICATE PLAIN sent.")
+                        sasl_stage = "auth"
+                        continue
+                    if cmd == "308":  # CAP ... NO (sasl not offered)
+                        self._logger.slog(
+                            "WARNING: server did not offer the sasl capability; "
+                            "falling back to unauthenticated login (refused by "
+                            "many networks, e.g. ircnet from overseas). %s" % q)
+                        sasl_stage = None
+                        self._register(conn)
+                        continue
+                    # 301 (CAP LS), 020, notices, ... -> keep waiting for 306/308
+                    continue
+                # sasl_stage == "auth"
+                if cmd == "301":
+                    # CAP LS arrives after CAP END; keep waiting for 905
+                    continue
                 if cmd == "AUTHENTICATE" and p0 == "+":
                     # some servers use `AUTHENTICATE +` for continuation
                     conn.send(Command.authenticate(self._sasl_payload))
@@ -371,7 +401,7 @@ class PDKServer:
                     sasl_sent = True
                     continue
                 if cmd == "904":
-                    sasl_done = True
+                    sasl_stage = None
                     self._wait_deadline = None
                     self._logger.slog("SASL success (username=%s)." % sasl_user)
                     self._register(conn)

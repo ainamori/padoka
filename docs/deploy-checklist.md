@@ -75,8 +75,10 @@ ERROR :Closing Link: <nick>[unknown@<IP>] (Unauthorized connection)
 
 海外から運用する場合は **dev サーバー + SASL** が必須です。`sasl:` を追加し、
 `username` / `password` に自分の NickServ 登録情報を入力してください。
-padoka は NICK 送信前に `AUTHENTICATE PLAIN` を行い、904 (success) を確認して
-から登録します。
+padoka は NICK 送信前に ircv3 の capability 交渉（`CAP REQ :sasl` → `306` →
+`CAP END`）を行い、その後に `AUTHENTICATE PLAIN` を行って 904 (success) を
+確認してから登録します。`CAP REQ` なしの `AUTHENTICATE` には一部のサーバー
+（ircnet の dev など）が 905 を返さず `020` でストールするため、交渉は必須です。
 
 **NickServ アカウントの用意（初回のみ）**: irssi 等で ircnet に一度接続し、
 
@@ -216,6 +218,7 @@ docker stop padoka             # 正常終了 (SIGTERM)
 | クライアントが TLS で接続できない | 証明書指紋の未登録（自己署名）/ `-ssl_verify=off`。ホスト側のポート公開 (`PADOKA_CLIENT_PORT`) / `client_server.acl` も確認 |
 | （クライアント側）SASL 認証で 907 が返る | `client_server.pass` とクライアント（irssi 等）側の SASL パスワード不一致 |
 | （上流側）`SASL failed` / 907 がログに出る | `servers[].sasl.password` が NickServ パスワードと不一致、または空（空なら「SASL configured but no password」の警告が出て SASL をスキップ）。正しい NickServ 認証情報を入力 |
+| `SASL: no server reply (905/904) within 60 seconds (last line: ... 020 ...)` | **古い padoka を使っている**（`CAP REQ :sasl` 交渉を行わない旧版では ircnet dev 等が 905 を返さず 020 でストールする）。最新版に更新（2026-11 以降、`CAP REQ` → `306` → `CAP END` → `AUTHENTICATE` の順で交渉する）。`python3 scripts/diag_upstream.py -c config/padoka.yml --cap` でサーバー側の SASL 提供・認証可否を切り分けできる |
 | ボットが動かない | `bots:` に name が入っているか / プラグインの読み込みエラーをログで確認 |
 | ログが出ない | `loglevel` が低すぎる（デバッグは 3）。`log/` のボリュームも確認 |
 | ログが乏しく原因が見えない | `padoka -c config/padoka.yml --debug` で起動すると loglevel 3 が強制され、上流からのログイン中の生応答（`[login] ...`）や TLS 状態（`TLS handshake ok (...)`）が見える（`--debug` は設定の `loglevel:` より優先） |

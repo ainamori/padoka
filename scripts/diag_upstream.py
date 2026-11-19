@@ -270,6 +270,7 @@ def main() -> int:
                     print("     R| %s" % t[:200])
                     if cmd_of(t) == "306":
                         cap_acked = True
+                        sd("CAP END")
                 if sasl_state != "closed":
                     print("   -> CAP %s" % ("ACK (306) received"
                                              if cap_acked else

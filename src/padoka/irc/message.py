@@ -198,6 +198,10 @@ class Command:
     @classmethod
     def pass_(cls, password): return cls._build("PASS", [password])
     @classmethod
+    def cap_req(cls, *caps): return cls._build("CAP", ["REQ", " ".join(caps)])
+    @classmethod
+    def cap_end(cls): return cls._build("CAP", ["END"])
+    @classmethod
     def authenticate(cls, *params): return cls._build("AUTHENTICATE", list(params))
     @classmethod
     def nick(cls, nick): return cls._build("NICK", [nick])
