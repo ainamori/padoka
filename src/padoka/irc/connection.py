@@ -59,6 +59,36 @@ class Connection:
     # -- lifecycle ---------------------------------------------------------
     CONNECT_TIMEOUT = 30  # seconds; bounds blackholed upstream connects
 
+    def build_ssl_context(self) -> "ssl.SSLContext":
+        """Build the TLS client context for the upstream connection.
+
+        PROTOCOL_TLS_CLIENT enables CERT_REQUIRED + check_hostname but
+        loads NO CA trust store (unlike ssl.create_default_context()), so
+        a trust anchor must be added explicitly; otherwise verification
+        of every public-CA certificate fails with "unable to get local
+        issuer certificate":
+        - ssl_params.ca_cert set  -> trust only that file (pinning)
+        - otherwise (verify on)   -> the system default CA bundle
+        """
+        sp = self.ssl_params or {}
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        if sp.get("verify") is False:
+            # Disabling verification requires check_hostname to be off as
+            # well (OpenSSL refuses CERT_NONE while check_hostname is on).
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        else:
+            ctx.check_hostname = bool(sp.get("check_hostname", True))
+        if sp.get("ca_cert"):
+            ctx.load_verify_locations(sp["ca_cert"])
+        elif ctx.verify_mode != ssl.CERT_NONE:
+            ctx.load_default_certs()
+        if sp.get("cert_file"):
+            ctx.load_cert_chain(
+                sp["cert_file"],
+                sp.get("key_file"))
+        return ctx
+
     def open(self) -> None:
         # A timeout so an unreachable upstream (dropped SYNs) cannot block
         # the server thread for minutes; raises OSError -> clean reconnect.
@@ -67,16 +97,7 @@ class Connection:
         raw.settimeout(None)  # reader loop wants blocking I/O
         self._sock = raw
         if self.ssl_params:
-            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            ctx.check_hostname = bool(self.ssl_params.get("check_hostname", True))
-            if self.ssl_params.get("verify") is False:
-                ctx.verify_mode = ssl.CERT_NONE
-            if self.ssl_params.get("ca_cert"):
-                ctx.load_verify_locations(self.ssl_params["ca_cert"])
-            if self.ssl_params.get("cert_file"):
-                ctx.load_cert_chain(
-                    self.ssl_params["cert_file"],
-                    self.ssl_params.get("key_file"))
+            ctx = self.build_ssl_context()
             self._tls = ctx.wrap_socket(raw, server_hostname=self.host)
         self._buf = b""
         self._closed.clear()

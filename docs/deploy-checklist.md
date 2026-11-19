@@ -210,7 +210,7 @@ docker stop padoka             # 正常終了 (SIGTERM)
 | `Connection closed by server` の繰り返し | 最新版ではログに `Last line from server:` が付く（`ERROR :Closing Link: ...` = サーバーが理由付きで拒否、`<none>` = 無言切断、`TLS failed for ...` = ハンドシェイク失敗）。段階切り分けに `python3 scripts/diag_upstream.py -c config/padoka.yml`（TCP→TLS→SASL→登録を各段階の生レスポンス付きで実行） |
 | login 直後に `ERROR :Closing Link: ... (Unauthorized connection)` | **ircnet の一般接続（irc/dh）は日本国内限定**。海外（GCP 等）から接続して発生。dev サーバー + `sasl:`（NickServ 認証）へ切替（「上流 SASL と地理制約」参照） |
 | IRC 接続できない（TLS） | `ssl_params.verify` / 証明書ストア。必要なら CA 指定 |
-| `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` | まず**最新の padoka を使っているか**（旧版は TLS コンテキストがシステム CA ストアを読まず、公的 CA 上流でも必ず発生した。修正済み）。それでも出るなら OS の CA ストアが古い可能性 → `dnf update ca-certificates && update-ca-trust`（root）。自己署名/私有 CA の場合は `scripts/fetch-upstream-cert.sh <host> <port>` で診断し `ca_cert` 固定（leaf を含めないこと） |
+| `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` | まず**最新の padoka を使っているか**（旧版は TLS コンテキストがシステム CA ストアを読まず、公的 CA 上流でも必ず発生した。修正済み）。それでも出るなら CA ストアが古い可能性 → ホストで `dnf update ca-certificates && update-ca-trust`（root）、Docker 運用ではベースイメージの更新で CA バンドルも更新される（`docker compose build --pull`）。自己署名/私有 CA の場合は `scripts/fetch-upstream-cert.sh <host> <port>` で診断し `ca_cert` 固定（leaf を含めないこと） |
 | 証明書固定しても同じ VERIFY_FAILED が出る | **leaf を含むファイルが `ca_cert` にある**可能性が高い（信頼ストア内の leaf は検証を壊す）。padoka.yml の `ca_cert` を外す / leaf を除いたファイルに差し替える |
 | `failed during tls handshake`（上記以外） | SNI/ホスト名不一致 → 指紋確認後に `check_hostname: false` も検討。中間ポートで TLS を剥がれている可能性（プロキシ環境） |
 | クライアントが TLS で接続できない | 証明書指紋の未登録（自己署名）/ `-ssl_verify=off`。ホスト側のポート公開 (`PADOKA_CLIENT_PORT`) / `client_server.acl` も確認 |

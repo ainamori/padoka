@@ -220,6 +220,60 @@ check("flood resets to 1 line after overflow", conn._flood_lines == 1)
 check("flood chars reset after overflow", conn._flood_chars == 600)
 
 # ---------------------------------------------------------------------------
+section("TLS upstream context (CA trust store)")
+import ssl as _ssl  # noqa: E402
+
+
+class _SslRec:
+    default_certs: int = 0
+    verify_locations: List = []
+
+
+_orig_ldc = _ssl.SSLContext.load_default_certs
+_orig_lvl = _ssl.SSLContext.load_verify_locations
+
+
+def _spy_ldc(self, *a):
+    _SslRec.default_certs += 1
+    return _orig_ldc(self, *a)
+
+
+def _spy_lvl(self, cafile=None, capath=None, cadata=None):
+    _SslRec.verify_locations.append(str(cafile))  # record only; fake path
+
+
+_ssl.SSLContext.load_default_certs = _spy_ldc  # type: ignore[assignment]
+_ssl.SSLContext.load_verify_locations = _spy_lvl  # type: ignore[assignment]
+try:
+    def _upstream_ctx(params):
+        return Connection("127.0.0.1", 6697,
+                          ssl_params=params).build_ssl_context()
+
+    c1 = _upstream_ctx({"verify": True})
+    check("verify on, no ca_cert -> system CA bundle loaded",
+          _SslRec.default_certs == 1 and _SslRec.verify_locations == [])
+    check("verify on, no ca_cert -> CERT_REQUIRED + check_hostname",
+          c1.verify_mode == _ssl.CERT_REQUIRED and c1.check_hostname is True)
+
+    c2 = _upstream_ctx({"verify": True, "ca_cert": "/tmp/fake-anchor.pem"})
+    check("ca_cert pinned -> trust file only, system bundle NOT loaded",
+          _SslRec.default_certs == 1 and
+          _SslRec.verify_locations == ["/tmp/fake-anchor.pem"])
+
+    c3 = _upstream_ctx({"verify": False})
+    check("verify off -> CERT_NONE, no CA loaded at all",
+          c3.verify_mode == _ssl.CERT_NONE
+          and _SslRec.default_certs == 1
+          and _SslRec.verify_locations == ["/tmp/fake-anchor.pem"])
+
+    c4 = _upstream_ctx({"check_hostname": False})
+    check("check_hostname: false honored (still CERT_REQUIRED)",
+          c4.check_hostname is False and c4.verify_mode == _ssl.CERT_REQUIRED)
+finally:
+    _ssl.SSLContext.load_default_certs = _orig_ldc  # type: ignore[assignment]
+    _ssl.SSLContext.load_verify_locations = _orig_lvl  # type: ignore[assignment]
+
+# ---------------------------------------------------------------------------
 section("CTCP ECHO / HELP / VERSION handling")
 from padoka.server import PDKServer  # noqa: E402
 from padoka.irc.message import IRCMessage as _Msg  # noqa: E402

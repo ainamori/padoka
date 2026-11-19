@@ -45,7 +45,11 @@ servers:
     port: 6697               # SSL/TLS & SASL（旧 SSL ポートは 6679）
     pass: null
     ssl_params:
-      verify: true           # ircnet は Let's Encrypt 発行
+      verify: true           # ircnet は Let's Encrypt 発行。CA はシステム
+                             # デフォルトストア（Docker はイメージ内
+                             # ca-certificates）を参照
+      # ca_cert: /path       # 自己署名/私有CA上流のピン留め（leaf を
+                             # 含めない。scripts/fetch-upstream-cert.sh 参照）
     # 上流 SASL（ircv3 PLAIN）。NICK/USER より前に AUTHENTICATE を行い、
     # 904 (success) を確認してから登録する。
     #   username = IRC ネットワークのアカウント名（ircnet は NickServ アカウント）

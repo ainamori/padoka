@@ -47,8 +47,10 @@ PADOKA_NICK = "padoka_py"
 # Fake upstream IRC server
 # ---------------------------------------------------------------------------
 class FakeIRCServer(threading.Thread):
-    def __init__(self):
+    def __init__(self, tls_cert=None, tls_key=None):
         super().__init__(daemon=True)
+        self.tls_cert = tls_cert
+        self.tls_key = tls_key
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("127.0.0.1", 0))
@@ -60,7 +62,12 @@ class FakeIRCServer(threading.Thread):
         self.sasl_ok = False
 
     def run(self):
-        self.conn, _ = self.sock.accept()
+        conn, _ = self.sock.accept()
+        if self.tls_cert:
+            tls_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            tls_ctx.load_cert_chain(self.tls_cert, self.tls_key)
+            conn = tls_ctx.wrap_socket(conn, server_side=True)
+        self.conn = conn
         self.conn.settimeout(10)
         f = self.conn.makefile("rb")
         # keep a PING timer going
@@ -349,6 +356,51 @@ channel_info:
         status = cl.wait_for(lambda l: "Running Status" in l, timeout=5.0)
         assert status, "did not receive /padoka status"
         print("[ok] /PADOKA STATUS works:", status)
+
+        # upstream TLS regression: verify: true with no ca_cert must trust
+        # the system CA store.  SSL_CERT_FILE points at the fake server's
+        # self-signed cert (load_default_certs honors the env override).
+        # Old padoka built PROTOCOL_TLS_CLIENT without loading any CA store,
+        # so this failed with "unable to get local issuer certificate".
+        from padoka.irc.connection import Connection
+        tls_srv = FakeIRCServer(tls_cert=cert,
+                                tls_key=os.path.join(tmpdir, "key.pem"))
+        tls_srv.start()
+        _old_cert_file = os.environ.get("SSL_CERT_FILE")
+        os.environ["SSL_CERT_FILE"] = cert
+        try:
+            uconn = Connection("127.0.0.1", tls_srv.port,
+                               ssl_params={"verify": True})
+            # verify: true => CERT_REQUIRED + check_hostname: open() raises
+            # SSLCertVerificationError unless the peer cert verifies against
+            # the loaded CA store, so a successful open() IS the assertion.
+            uconn.open()
+            assert uconn._tls is not None, "upstream connection is not TLS"
+            uconn.send(IRCMessage.parse("NICK %s" % PADOKA_NICK))
+            uwelcome: object = None
+            deadline = time.time() + 10
+            while uwelcome is None and time.time() < deadline:
+                try:
+                    msg = uconn.queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                if msg is None:
+                    break  # upstream closed
+                if isinstance(msg, IRCMessage) and msg.command == "001":
+                    uwelcome = msg
+            assert uwelcome, \
+                "upstream TLS connection did not complete login (001)"
+            print("[ok] upstream TLS verified against CA store (001 received)")
+            uconn.close()
+        finally:
+            if _old_cert_file is None:
+                del os.environ["SSL_CERT_FILE"]
+            else:
+                os.environ["SSL_CERT_FILE"] = _old_cert_file
+            try:
+                tls_srv.sock.close()
+            except OSError:
+                pass
 
         cl.close()
         cl2.close()
