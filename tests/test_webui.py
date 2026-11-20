@@ -246,9 +246,17 @@ wlive.start()
 base = "http://127.0.0.1:%d" % wlive.port
 try:
     # page
-    html = _get(base + "/").read().decode()
+    resp = _get(base + "/")
+    html = resp.read().decode()
     check("page served", "<!doctype html>" in html.lower())
     check("page title injected", "Test WebUI" in html)
+    # version stamp lets an operator verify which code level serves the page
+    from padoka import VERSION as _WVER
+    check("page version stamp", _WVER in html)
+    # no-store: the embedded UI must never be browser-cached, otherwise an
+    # upgrade + restart stays invisible until a hard reload
+    check("page no-store cache header",
+          resp.headers.get("Cache-Control") == "no-store")
     # .hidden must be declared AFTER .login in the stylesheet: both are
     # single-class selectors, so source order decides the cascade.  If
     # .login (display:flex) comes later, the full-screen login overlay is

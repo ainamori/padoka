@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "padoka"
-version = "0.10.1"
+version = "0.10.2"
 description = "Padoka - IRC client/server proxy"
 readme = "README.md"
 requires-python = ">=3.8"

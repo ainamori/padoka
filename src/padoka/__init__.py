@@ -6,6 +6,6 @@ so regular IRC clients (e.g. irssi, weechat) can attach to it.
 It also hosts a plugin "bot" framework.
 """
 
-VERSION = "0.10.1-py"
+VERSION = "0.10.2-py"
 
 __all__ = ["VERSION"]

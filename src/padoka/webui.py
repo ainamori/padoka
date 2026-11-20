@@ -414,13 +414,16 @@ def _make_handler(webui: WebUI):
                 return True
             return hmac.compare_digest(_token_from(self), pw)
 
-        def _send(self, code: int, ctype: str, body: str) -> None:
+        def _send(self, code: int, ctype: str, body: str,
+                  extra: Optional[Tuple[str, str]] = None) -> None:
             data = body.encode("utf-8")
             self.send_response(code)
             self.send_header("Content-Type", ctype + "; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+            if extra:
+                self.send_header(extra[0], extra[1])
             self.end_headers()
             self.wfile.write(data)
 
@@ -517,8 +520,14 @@ def _make_handler(webui: WebUI):
 
         # -- page / sse ---------------------------------------------------
         def _serve_page(self) -> None:
-            html = _INDEX_HTML.replace("__TITLE__", webui._title())
-            self._send(200, "text/html", html)
+            # The page embeds the ENTIRE UI (HTML/CSS/JS) from this process's
+            # memory, so a browser-cached copy can outlive an upgrade +
+            # restart indefinitely.  no-store forbids caching; the version
+            # stamp in the header makes the served code level verifiable.
+            html = (_INDEX_HTML.replace("__TITLE__", webui._title())
+                             .replace("__VERSION__", VERSION))
+            self._send(200, "text/html", html,
+                       extra=("Cache-Control", "no-store"))
 
         def _serve_sse(self, q) -> None:
             if not self._auth_ok():
@@ -617,6 +626,7 @@ border-radius:6px;padding:9px 11px;font-size:14px;}
 padding:0 18px;font-weight:600;cursor:pointer;}
 .send button:disabled{opacity:.5;cursor:default;}
 .err{color:var(--bad);font-size:12px;margin:4px 0;}
+.ver{color:var(--dim);font-size:11px;font-weight:400;}
 .login{position:fixed;inset:0;background:var(--bg);display:flex;
 align-items:center;justify-content:center;}
 .login-box{background:var(--panel);border:1px solid var(--line);border-radius:10px;
@@ -636,7 +646,7 @@ border-radius:6px;padding:9px;font-weight:600;cursor:pointer;}
 <body>
 <div id="app" class="hidden">
   <header>
-    <div class="title">__TITLE__</div>
+    <div class="title">__TITLE__ <span class="ver">__VERSION__</span></div>
     <div class="status">
       <span id="statustext">…</span>
       <span class="dot" id="dot"></span>
