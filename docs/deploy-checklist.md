@@ -25,7 +25,7 @@ ss -tlnp | grep 6667     # 使用済みなら PADOKA_CLIENT_PORT を変える
 
 | 項目 | 説明 |
 |------|------|
-| `servers` | 接続先 IRC サーバー（host / port / ssl_params / sasl） |
+| `servers` | 接続先 IRC サーバー（host / port / ssl / ssl_params / sasl） |
 | `nick` | IRC 上で使う nick（衝突すると自動で `0` が付加されて再試行） |
 | `client_server.pass` | IRC クライアント側の接続パスワード |
 | `client_server.acl` | 接続元を制限（`deny all` + 個別 `allow` を推奨） |

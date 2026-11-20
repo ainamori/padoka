@@ -244,6 +244,18 @@ class Config:
             host = si["host"]
             passw = si.get("pass")
             sslp = si.get("ssl_params")
+            # Explicit per-server TLS switch: `ssl: false` forces a
+            # plaintext (unencrypted) upstream connection and ignores
+            # ssl_params.  Useful for local / proxied upstream servers
+            # that speak plain IRC.
+            if not si.get("ssl", True):
+                if sslp:
+                    # Warn on stderr: the logger does not exist yet at
+                    # this point in load_config().
+                    print("padoka: WARNING: server %s has ssl: false and "
+                          "ssl_params set; ignoring ssl_params (plaintext "
+                          "connection)." % host, file=sys.stderr)
+                sslp = None
             # per-server upstream SASL (ircv3 PLAIN), e.g.:
             #   sasl:
             #     username: mynick

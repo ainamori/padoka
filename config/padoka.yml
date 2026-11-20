@@ -37,11 +37,14 @@ webui:
 
 # --------------------------------------------------------------- IRC サーバー
 # 接続先 IRC サーバー。複数指定するとランダム選択し、
-# 再接続時にローテーション。 TLS 利用は ssl_params を追加。
+# 再接続時にローテーション。 TLS は ssl_params を追加で有効、
+# ssl: false で無効化（平文接続。平文上流では両方省略で可）。
 servers:
   - host: dev.ircnet.ne.jp   # ircnet 開発サーバー（SASL-open・海外でも接続可）
     port: 6697               # SSL/TLS & SASL（旧 SSL ポートは 6679）
     pass: null
+    # ssl: true              # false => TLS 無効（平文接続）。この場合
+                             # ssl_params は無視される（WARNING が出る）
     ssl_params:
       verify: true           # ircnet は Let's Encrypt 発行。CA はシステム
                              # デフォルトストア（Docker はイメージ内

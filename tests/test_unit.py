@@ -370,6 +370,47 @@ check("ascii-filename round-trip astral",
       _decode_ascii_filename(_ascii_filename("a😀b")) == "a😀b")
 
 # ---------------------------------------------------------------------------
+section("Config._build_server_list (per-server ssl switch)")
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+# Bind the real method to a lightweight namespace (it only touches its
+# argument), like the channel-name helpers above.
+_srl = types.SimpleNamespace()
+_srl._build_server_list = types.MethodType(Config._build_server_list, _srl)
+_err = io.StringIO()
+with contextlib.redirect_stderr(_err):
+    sl = _srl._build_server_list([
+        {"host": "a", "port": 6667,
+         "ssl": False, "ssl_params": {"verify": True}},
+        {"host": "b", "port": 6667, "ssl": False},
+        {"host": "c", "port": 6697, "ssl_params": {"verify": True}},
+        {"host": "d", "port": 6697, "ssl": True,
+         "ssl_params": {"verify": True}},
+    ])
+check("ssl:false drops ssl_params (plaintext)",
+      sl[0]["ssl_params"] is None)
+check("ssl:false without ssl_params stays plaintext",
+      sl[1]["ssl_params"] is None)
+check("ssl:false + ssl_params emits WARNING",
+      "WARNING" in _err.getvalue() and "server a" in _err.getvalue())
+check("ssl omitted keeps ssl_params (TLS)",
+      sl[2]["ssl_params"] == {"verify": True})
+check("ssl:true keeps ssl_params (TLS)",
+      sl[3]["ssl_params"] == {"verify": True})
+check("hosts/ports untouched by ssl switch",
+      [(s["host"], s["port"]) for s in sl] ==
+      [("a", 6667), ("b", 6667), ("c", 6697), ("d", 6697)])
+# Port expansion still works together with the ssl switch.
+_srl2 = types.SimpleNamespace()
+_srl2._build_server_list = types.MethodType(Config._build_server_list, _srl2)
+sl2 = _srl2._build_server_list(
+    [{"host": "e", "port": [6667, 6668], "ssl": False}])
+check("ssl:false with port list expands",
+      [s["port"] for s in sl2] == [6667, 6668]
+      and all(s["ssl_params"] is None for s in sl2))
+
+# ---------------------------------------------------------------------------
 section("safe_calc (arithmetic only, blocks injection)")
 check("2+3*4=14", safe_calc("2+3*4") == 14)
 check("(1+2)*3=9", safe_calc("(1+2)*3") == 9)

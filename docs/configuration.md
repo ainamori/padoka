@@ -94,6 +94,8 @@ servers:
   - host: irc.ircnet.ne.jp
     port: 6697
     pass: null              # 上流サーバーのサーバーパス（省略可）
+    # ssl: true             # false => TLS 無効（平文接続）。ssl_params は
+                            # 無視される（ローカル/中継の平文上流用）
     ssl_params:
       verify: true          # 証明書検証
       # ca_cert: /path      # 独自CA（自己署名上流のピンニングに使用）
@@ -105,6 +107,21 @@ servers:
     # sasl:
     #   username: mynick      # NickServ アカウント（省略すると user を使用）
     #   password: nickserv_password
+```
+
+#### TLS の無効化（平文接続）
+
+TLS は `ssl_params` を指定した場合のみ有効になります（未指定のサーバーは
+平文 6667 で接続します）。ローカルの中継や平文 IRC のみを提供する上流に
+接続したい場合は、`ssl: false` をサーバー条目に設定すると、`ssl_params`
+があっても無視されて平文で接続します（両方指定している場合は設定読み込み時
+に WARNING が出力されます）。
+
+```yaml
+servers:
+  - host: localhost
+    port: 6667
+    ssl: false              # 平文接続（ssl_params を無視）
 ```
 
 #### 上流 SASL（ircv3 PLAIN）
