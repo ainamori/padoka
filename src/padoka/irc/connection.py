@@ -36,10 +36,15 @@ class Connection:
     FLOOD_MAX_LINES = 8       # max PRIVMSG/NOTICE lines per window
 
     def __init__(self, host: str, port: int,
-                 ssl_params: Optional[dict] = None):
+                 ssl_params: Optional[dict] = None,
+                 encoding: str = "utf-8"):
         self.host = host
         self.port = port
         self.ssl_params = ssl_params or None
+        # Wire charset for the raw IRC socket (config `irc_encoding`).
+        # IRC is byte-oriented; UTF-8 is the default but legacy networks
+        # may use e.g. Shift_JIS / EUC-JP.
+        self.encoding = encoding
         self.queue: "queue.Queue[object]" = queue.Queue()
         self._sock: Optional[socket.socket] = None
         self._tls: Optional[ssl.SSLSocket] = None
@@ -158,7 +163,7 @@ class Connection:
 
     def _handle_line(self, line: bytes) -> None:
         try:
-            text = line.decode("utf-8", errors="replace")
+            text = line.decode(self.encoding, errors="replace")
             self.last_line = text
             self.queue.put(IRCMessage.parse(text))
         except ValueError:
@@ -226,7 +231,7 @@ class Connection:
                 time.sleep(wait)
 
     def send(self, msg: IRCMessage) -> None:
-        data = msg.to_s().encode("utf-8", errors="replace")
+        data = msg.to_s().encode(self.encoding, errors="replace")
         if msg.command in ("PRIVMSG", "NOTICE"):
             self._flood_throttle(msg, len(data))
         # non-blocking socket: sendall() is replaced by a retrying send()

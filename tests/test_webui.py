@@ -264,6 +264,12 @@ try:
     check(".hidden declared after .login (cascade order)",
           html.find(".login{") != -1 and
           html.find(".hidden{display:none;}") > html.find(".login{"))
+    # 0.10.3 UI features: Join button, members panel, auto-reload menu
+    check("page has join button", 'id="btnjoin"' in html)
+    check("page has members panel", 'id="memberlist"' in html)
+    check("page has auto reload menu",
+          'id="btnauto"' in html and 'id="automenu"' in html and
+          all(('data-int="%d"' % i) in html for i in (0, 30, 60, 300)))
 
     # status
     data = json.loads(_get(base + "/api/status").read())

@@ -625,6 +625,21 @@ border-radius:6px;padding:9px 11px;font-size:14px;}
 .send button{background:var(--accent);color:#04121f;border:0;border-radius:6px;
 padding:0 18px;font-weight:600;cursor:pointer;}
 .send button:disabled{opacity:.5;cursor:default;}
+.members{width:190px;background:var(--panel);border-left:1px solid var(--line);
+overflow-y:auto;flex-shrink:0;}
+.members h3{margin:10px 12px 4px;font-size:11px;color:var(--dim);text-transform:uppercase;}
+.member{padding:2px 14px;font-size:13px;white-space:nowrap;overflow:hidden;
+text-overflow:ellipsis;}
+.member.op{color:var(--ok);}
+.member.voice{color:var(--notice);}
+.member.self{color:var(--accent);font-weight:600;}
+.autowrap{position:relative;display:inline-block;}
+.menu{position:absolute;right:0;top:calc(100% + 4px);background:var(--panel2);
+border:1px solid var(--line);border-radius:6px;z-index:20;min-width:80px;
+box-shadow:0 4px 12px rgba(0,0,0,.4);}
+.menu button{display:block;width:100%;text-align:left;background:none;border:0;
+color:var(--fg);padding:5px 12px;cursor:pointer;font-size:12px;}
+.menu button:hover{background:var(--panel);}
 .err{color:var(--bad);font-size:12px;margin:4px 0;}
 .ver{color:var(--dim);font-size:11px;font-weight:400;}
 .login{position:fixed;inset:0;background:var(--bg);display:flex;
@@ -663,8 +678,18 @@ border-radius:6px;padding:9px;font-weight:600;cursor:pointer;}
         <span class="topic" id="chantopic"></span>
         <span style="flex:1"></span>
         <button id="btnlog" title="ログファイルを再読込">ログ読込</button>
-        <button id="btnpart">Part</button>
-        <button id="btnreload">Reload</button>
+        <button id="btnjoin" title="このチャネルに再参加">Join</button>
+        <button id="btnpart" title="このチャネルから離脱">Part</button>
+        <button id="btnreload" title="設定を再読込">Reload</button>
+        <span class="autowrap">
+          <button id="btnauto" title="Reload を定期実行">Auto: off</button>
+          <div id="automenu" class="menu hidden">
+            <button data-int="0">off</button>
+            <button data-int="30">30 秒</button>
+            <button data-int="60">1 分</button>
+            <button data-int="300">5 分</button>
+          </div>
+        </span>
       </div>
       <div class="messages" id="messages"></div>
       <form class="send" id="sendform">
@@ -673,6 +698,10 @@ border-radius:6px;padding:9px;font-weight:600;cursor:pointer;}
         <button type="submit" id="sendbtn">送信</button>
       </form>
     </section>
+    <div class="members">
+      <h3>Members</h3>
+      <div id="memberlist"></div>
+    </div>
   </div>
 </div>
 <div id="login" class="login">
@@ -691,6 +720,8 @@ let token = sessionStorage.getItem(TOKEN_KEY) || "";
 let current = null;      // current channel key ("" = system/all)
 let es = null;           // EventSource
 let statusTimer = null;
+let autoTimer = null;    // auto reload (interval timer)
+let memberUpd = false;   // member-list refresh debounce
 
 const $ = (id) => document.getElementById(id);
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,
@@ -735,6 +766,33 @@ function addChan(parent, key, label, cnt){
   parent.appendChild(b);
 }
 
+function renderMembers(st){
+  const list = $("memberlist");
+  list.innerHTML = "";
+  const c = (st.channels||[]).find(x=>x.name===current);
+  if (!c){
+    const d=document.createElement("div");
+    d.className="member"; d.style.color="var(--dim)";
+    d.textContent="(参加していません)";
+    list.appendChild(d);
+    return;
+  }
+  (c.members||[]).forEach(n=>{
+    const d=document.createElement("div");
+    const plain = (n[0]==="@"||n[0]==="+") ? n.slice(1) : n;
+    d.className="member"+(n[0]==="@"?" op":n[0]==="+"?" voice":"")
+      +(plain===st.nick?" self":"");
+    d.textContent=n;
+    list.appendChild(d);
+  });
+}
+function scheduleMemberUpdate(){
+  // debounced: a burst of JOIN/PART/KICK/NICK -> one status refetch
+  if (memberUpd) return;
+  memberUpd = true;
+  setTimeout(()=>{ memberUpd=false; refresh(); }, 1000);
+}
+
 function renderLine(rec){
   const div = document.createElement("div");
   div.className = "line " + (rec.command||"").toLowerCase();
@@ -767,8 +825,20 @@ async function selectChannel(ch){
   // live stream
   const url = "/api/events?channel="+encodeURIComponent(ch)+"&token="+encodeURIComponent(token);
   es = new EventSource(url);
-  es.onmessage = (e)=>{ try{ renderLine(JSON.parse(e.data)); }catch(_){ } };
+  es.onmessage = (e)=>{
+    let rec; try{ rec=JSON.parse(e.data); }catch(_){ return; }
+    renderLine(rec);
+    // membership / name changes in the current channel -> refresh member list
+    if (rec.channel===current &&
+        (rec.command==="JOIN"||rec.command==="PART"||
+         rec.command==="KICK"||rec.command==="NICK"))
+      scheduleMemberUpdate();
+  };
   es.onerror = ()=>{ /* EventSource auto-reconnects */ };
+  // fill topic + member list for the newly selected channel immediately
+  // (init() refreshes BEFORE the first selection, so without this the
+  // right panel would stay empty until the next 15s timer tick)
+  refresh();
   scrollBottom();
 }
 
@@ -777,6 +847,7 @@ async function refresh(){
     const st = await api("/api/status");
     renderStatus(st);
     renderChannels(st);
+    renderMembers(st);
     // fill topic for current
     const c = (st.channels||[]).find(x=>x.name===current);
     if (c) $("chantopic").textContent = c.topic || "";
@@ -798,6 +869,7 @@ async function init(){
   await selectChannel(current);
   if (statusTimer) clearInterval(statusTimer);
   statusTimer = setInterval(refresh, 15000);
+  setAuto(sessionStorage.getItem("padoka_auto"));
   scrollBottom();
 }
 
@@ -823,8 +895,24 @@ $("sendform").addEventListener("submit", async (e)=>{
   $("sendbtn").disabled = false;
   $("msginput").focus();
 });
-$("btnpart").onclick = async ()=>{ if(current) await post("/api/part",{channel:current}).catch(()=>{}); };
-$("btnreload").onclick = async ()=>{ await post("/api/reload",{}).catch(()=>{}); setTimeout(refresh,800); };
+function canJoin(){ return current && current!=="system" && current!=="pm"; }
+$("btnjoin").onclick = async ()=>{ if(canJoin()) await post("/api/join",{channel:current}).catch(()=>{}); };
+$("btnpart").onclick = async ()=>{ if(canJoin()) await post("/api/part",{channel:current}).catch(()=>{}); };
+function doReload(){ post("/api/reload",{}).catch(()=>{}); setTimeout(refresh,800); }
+$("btnreload").onclick = doReload;
+function setAuto(sec){
+  sec = parseInt(sec,10) || 0;
+  if ([0,30,60,300].indexOf(sec) < 0) sec = 0;
+  sessionStorage.setItem("padoka_auto", String(sec));
+  if (autoTimer){ clearInterval(autoTimer); autoTimer = null; }
+  if (sec > 0) autoTimer = setInterval(doReload, sec*1000);
+  $("btnauto").textContent = "Auto: " + ({0:"off",30:"30秒",60:"1分",300:"5分"}[sec]);
+}
+$("btnauto").onclick = (e)=>{ e.stopPropagation(); $("automenu").classList.toggle("hidden"); };
+$("automenu").querySelectorAll("button").forEach(b=>{
+  b.onclick = (e)=>{ e.stopPropagation(); setAuto(b.dataset.int); $("automenu").classList.add("hidden"); };
+});
+document.addEventListener("click", ()=>$("automenu").classList.add("hidden"));
 $("btnlog").onclick = async ()=>{
   if(!current) return;
   try{

@@ -36,6 +36,9 @@ class PDKClient:
     def __init__(self, config, sock: socket.socket, manager):
         self.config = config
         self.logger = config.logger
+        # IRC wire charset for this client's raw socket (config
+        # `irc_encoding`, default utf-8).  See Connection for the rationale.
+        self.encoding = getattr(config, "irc_encoding", "utf-8")
         self.manager = manager
         self._state = manager.state
         self.sock = sock
@@ -362,7 +365,7 @@ class PDKClient:
             except queue.Empty:
                 return True
             try:
-                self.sock.sendall(item.to_s().encode("utf-8", errors="replace"))
+                self.sock.sendall(item.to_s().encode(self.encoding, errors="replace"))
             except OSError:
                 self._stop = True
                 return False
@@ -423,7 +426,7 @@ class PDKClient:
 
     def _parse_line(self, line: bytes) -> Optional[IRCMessage]:
         try:
-            return IRCMessage.parse(line.decode("utf-8", errors="replace"))
+            return IRCMessage.parse(line.decode(self.encoding, errors="replace"))
         except ValueError as ex:
             self.logger.slog("Invalid Message: %s" % ex)
             return None

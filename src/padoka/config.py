@@ -8,6 +8,7 @@ derives all runtime values: server list, channels, logwriters, bots, ACL.
 from __future__ import annotations
 
 import importlib.util
+import codecs
 import os
 import re
 import sys
@@ -154,6 +155,10 @@ class Config:
         self.plugins_dir = r.get("plugins_dir", "./plugins")
         self.backlog_lines = int(r.get("backlog_lines", 20))
         self.filename_encoding = r.get("filename_encoding", "utf8")
+        # IRC wire charset (upstream + attached clients).  The WebUI and
+        # SASL are always UTF-8 by spec; this only affects the raw IRC
+        # socket bytes, so a non-UTF-8 network can be served correctly.
+        self.irc_encoding = self._resolve_irc_encoding(r.get("irc_encoding"))
         self.reconnect_delay = int(r.get("reconnect_delay", 150))
 
         # user / nick
@@ -233,6 +238,23 @@ class Config:
 
         self._acl_setting()
         self._load_bots(r.get("bots"))
+
+    def _resolve_irc_encoding(self, raw) -> str:
+        """Validate the configured IRC wire codec; fall back to utf-8.
+
+        IRC is byte-oriented and not required to be UTF-8; legacy networks
+        (e.g. some Japanese ones) use Shift_JIS / EUC-JP.  A name that does
+        not resolve would crash the wire I/O, so we validate and fall back,
+        warning on stderr (the logger is not ready this early in load).
+        """
+        enc = raw or "utf-8"
+        try:
+            codecs.lookup(enc)
+            return enc
+        except (LookupError, TypeError):
+            print("padoka: WARNING: unknown irc_encoding %r; using utf-8."
+                  % (raw,), file=sys.stderr)
+            return "utf-8"
 
     # ------------------------------------------------------------ servers
     def _build_server_list(self, servers) -> List[dict]:

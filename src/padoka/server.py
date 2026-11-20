@@ -219,7 +219,8 @@ class PDKServer:
     def _make_server_conn(self) -> Connection:
         host, port, self._server_pass, sslp, self._server_sasl = \
             self.next_server_info()
-        conn = Connection(host, port, sslp)
+        conn = Connection(host, port, sslp,
+                          encoding=self._config.irc_encoding)
         conn.queue = self._in_q  # feed parsed messages to our dispatcher
         return conn
 

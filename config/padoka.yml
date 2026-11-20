@@ -7,6 +7,11 @@
 setting_name: mypadoka
 loglevel: 2                # 0 quiet, 1 ch log, 2 normal, 3 debug
 padoka_server_name: PadokaProgram
+# IRC ワイヤ文字コード（上流サーバー＋接続クライアントの生ソケット用）。
+# 既定 utf-8。Shift_JIS / EUC-JP 等のレガシー文字コードを使うネットワークでは
+# 該当値を設定すると、他 IRC クライアントでの文字化けを解消できる。
+# WebUI（HTTP/JSON）と SASL は仕様上常に UTF-8（この設定の対象外）。
+irc_encoding: utf-8
 
 # ------------------------------------------------------------- クライアントサーバー
 client_server:

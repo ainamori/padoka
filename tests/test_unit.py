@@ -370,6 +370,53 @@ check("ascii-filename round-trip astral",
       _decode_ascii_filename(_ascii_filename("a😀b")) == "a😀b")
 
 # ---------------------------------------------------------------------------
+section("Config._resolve_irc_encoding (IRC wire charset)")
+_ns3 = types.SimpleNamespace()
+_ns3._resolve_irc_encoding = types.MethodType(
+    Config._resolve_irc_encoding, _ns3)
+check("irc_encoding default utf-8", _ns3._resolve_irc_encoding(None) == "utf-8")
+check("irc_encoding passthrough utf-8",
+      _ns3._resolve_irc_encoding("utf-8") == "utf-8")
+check("irc_encoding passthrough shift_jis",
+      _ns3._resolve_irc_encoding("shift_jis") == "shift_jis")
+check("irc_encoding passthrough euc_jp",
+      _ns3._resolve_irc_encoding("euc_jp") == "euc_jp")
+check("irc_encoding unknown -> utf-8",
+      _ns3._resolve_irc_encoding("no_such_codec") == "utf-8")
+
+# ---------------------------------------------------------------------------
+section("IRC wire charset (Connection decode/encode)")
+class _FakeSock:
+    def __init__(self):
+        self.sent = bytearray()
+    def send(self, view):
+        self.sent += bytes(view)
+        return len(view)
+    def close(self):
+        pass
+
+sjconn = Connection("h", 1, encoding="shift_jis")
+sjconn._handle_line(":a!b@h PRIVMSG #c :こんにちは".encode("shift_jis"))
+m_sj = sjconn.queue.get_nowait()
+check("connection decodes shift_jis",
+      m_sj.command == "PRIVMSG" and m_sj.params == ["#c", "こんにちは"])
+
+sj_fake = _FakeSock()
+sjconn._sock = sj_fake
+sjconn.send(_Msg.parse(":x!y@z PRIVMSG #c :こんにちは"))
+check("connection encodes shift_jis",
+      bytes(sj_fake.sent) ==
+      _Msg.parse(":x!y@z PRIVMSG #c :こんにちは").to_s().encode("shift_jis"))
+
+uconn = Connection("h", 1)
+u_fake = _FakeSock()
+uconn._sock = u_fake
+uconn.send(_Msg.parse(":x!y@z PRIVMSG #c :こんにちは"))
+check("connection default stays utf-8",
+      bytes(u_fake.sent) ==
+      _Msg.parse(":x!y@z PRIVMSG #c :こんにちは").to_s().encode("utf-8"))
+
+# ---------------------------------------------------------------------------
 section("Config._build_server_list (per-server ssl switch)")
 import contextlib  # noqa: E402
 import io  # noqa: E402
