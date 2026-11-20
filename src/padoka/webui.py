@@ -617,7 +617,6 @@ border-radius:6px;padding:9px 11px;font-size:14px;}
 padding:0 18px;font-weight:600;cursor:pointer;}
 .send button:disabled{opacity:.5;cursor:default;}
 .err{color:var(--bad);font-size:12px;margin:4px 0;}
-.hidden{display:none;}
 .login{position:fixed;inset:0;background:var(--bg);display:flex;
 align-items:center;justify-content:center;}
 .login-box{background:var(--panel);border:1px solid var(--line);border-radius:10px;
@@ -628,6 +627,10 @@ padding:28px 32px;width:320px;}
 color:var(--fg);border-radius:6px;padding:9px 11px;font-size:14px;margin-bottom:10px;}
 .login-box button{width:100%;background:var(--accent);color:#04121f;border:0;
 border-radius:6px;padding:9px;font-weight:600;cursor:pointer;}
+/* NOTE: must come AFTER the .login rule -- both are single-class selectors, so
+   source order decides the cascade; otherwise .login's display:flex would
+   keep the full-screen overlay visible even when hidden is added. */
+.hidden{display:none;}
 </style>
 </head>
 <body>

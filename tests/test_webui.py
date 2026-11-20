@@ -249,6 +249,13 @@ try:
     html = _get(base + "/").read().decode()
     check("page served", "<!doctype html>" in html.lower())
     check("page title injected", "Test WebUI" in html)
+    # .hidden must be declared AFTER .login in the stylesheet: both are
+    # single-class selectors, so source order decides the cascade.  If
+    # .login (display:flex) comes later, the full-screen login overlay is
+    # never hidden after a successful login.
+    check(".hidden declared after .login (cascade order)",
+          html.find(".login{") != -1 and
+          html.find(".hidden{display:none;}") > html.find(".login{"))
 
     # status
     data = json.loads(_get(base + "/api/status").read())
