@@ -1,9 +1,16 @@
 # Padoka - IRC クライアント/サーバー プロキシ
 
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE)
+
 Padoka は IRC サーバーに接続し、独自に IRC クライアントポート
 （デフォルト `6667`）を公開するプロキシです。
 irssi や weechat などの通常の IRC クライアントから接続できます。
 また、Python 製のボットプラグインフレームワークを内蔵しています。
+
+**系譜**: Padoka は Perl 製の [madoka](https://www.madoka.org/)（まどかちゃん）→
+Ruby 製の [nadoka](https://github.com/nadoka/nadoka) の系譜を受け継ぎ、
+その機能設計を Python に再実装したものです。
+詳細は [docs/lineage.md](docs/lineage.md) を参照してください。
 
 > 🚀 **まずは動かしたい方**: [Quick Start](docs/quickstart.md) を見てください。
 > 10 分で「IRC に 1 nick で常駐し、複数クライアントから使えるプロキシ」が手に入ります。
@@ -79,7 +86,7 @@ PADOKA_CLIENT_PORT=16667 docker compose up -d
 | [docs/bot-development.md](docs/bot-development.md) | ボットプラグイン開発ガイド |
 | [docs/webui.md](docs/webui.md) | **WebUI**（ブラウザからログ閲覧・発言） |
 | [docs/docker.md](docs/docker.md) | Docker / docker-compose 運用ガイド |
-| [docs/madoka-analysis.md](docs/madoka-analysis.md) | madoka 4.2.10（Perl 版）解析レポート（取り込み候補機能） |
+| [docs/lineage.md](docs/lineage.md) | **系譜と移植説明**（madoka / nadoka → padoka、ライセンス） |
 
 ## WebUI
 
@@ -228,7 +235,10 @@ IRC 経由でも制御できます:
 ├── tests/             # テスト
 ├── Dockerfile
 ├── docker-compose.yml
-└── pyproject.toml
+├── pyproject.toml
+├── LICENSE            # AGPL-3.0 全文
+├── NOTICE             # 出典表明（madoka / nadoka / PyYAML）
+└── README.md
 ```
 
 ## テスト
@@ -240,10 +250,14 @@ python tests/test_integration.py
 フェイク IRC サーバー + PDKServer + フェイククライアントを起動し、
 接続・ログイン・PONG・ボット応答・メッセージ転送・/PADOKA STATUS を確認します。
 
-## CI
+## ライセンス
 
-GitHub Actions（`.github/workflows/ci.yml`）が push / PR で自動的に実行します。
+Padoka は **GNU Affero General Public License v3.0 or later**
+（AGPL-3.0-or-later）で公開されています。全文は [LICENSE](LICENSE)。
 
-- **test**: 全ファイルのコンパイルチェック + 上記統合テスト（Python 3.10 / 3.12）。
-  外部ネットワークに依らず（フェイク IRC サーバー）確定的に回帰を検出します。
-- **docker**: イメージのビルド + 起動スクリプト / import の確認。
+- 出典表明（madoka / nadoka の系譜、PyYAML）は [NOTICE](NOTICE)
+- 系譜と移植の範囲は [docs/lineage.md](docs/lineage.md)
+
+AGPL-3.0 はネットワーク利用限定の copyleft ライセンスです。
+Padoka（または改変版）をネットワークサービスとして提供する場合は、
+対応するソースコードの公開が義務になります（AGPL v3 第 13 条）。

@@ -1,0 +1,42 @@
+Padoka
+Copyright (c) 2026 Akira Inamori
+
+本プログラムは GNU Affero General Public License version 3.0 (AGPL-3.0)
+の下で公開されています。全文は LICENSE ファイルを参照してください。
+
+--------------------------------------------------------------------------------
+系譜 (Lineage)
+--------------------------------------------------------------------------------
+
+Padoka は、以下のソフトウェアの系譜を受け継いだ IRC 常駐ソフトウェアです。
+
+1. madoka - IRC 常駐ソフト「まどかちゃん」
+   Copyright (c) 1998-, The madoka project
+   <https://www.madoka.org/> (最終リリース 4.2.10, Perl)
+
+   「IRC に 1 つの nick で常駐し、複数の IRC クライアントから同一セッション
+   を共有して使える IRC クライアント / サーバー プロキシ」という概念は
+   madoka 由来です。Padoka は madoka の機能設計（flood 制御、チャネル
+   自動再参加、ボットプラグイン方式など）を Python に再実装したものです。
+   madoka 本体のコードは本リポジトリに含まれません。
+
+2. nadoka - IRC Client Server program (madoka の Ruby 再実装)
+   Copyright (c) 2004-2005 SASADA Koichi <ko1@atdot.net>
+   et al. (Kazuhiro NISHIYAMA ほか)
+   <https://github.com/nadoka/nadoka>
+
+   nadoka は madoka と同概念の Ruby 実装であり、Padoka は nadoka を
+   参照しながら Python に書き換えたものです。nadoka は「Ruby のライセンス
+   と同条項で再配布・修改可能」として公開されています（リポジトリ内に
+   LICENSE ファイルはありません）。Padoka には nadoka のコードの直接コピー
+   は含まれていませんが、ボットプラグイン群（plugins/）は nadoka / madoka
+   の同名プラグインの機能移植です。
+
+--------------------------------------------------------------------------------
+サードパーティソフト
+--------------------------------------------------------------------------------
+
+- PyYAML (vendor/*.whl にオフラインビルド用の wheel を同梱)
+  MIT License
+  Copyright (c) 2017-2021 David Halter and contributors
+  <https://pyyaml.org/>

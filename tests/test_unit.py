@@ -1,3 +1,24 @@
+# Copyright (c) 2026 Akira Inamori
+#
+# Padoka is a Python re-implementation of nadoka
+# (https://github.com/nadoka/nadoka), which was itself modeled on
+# madoka (https://www.madoka.org/), the original IRC client-server
+# program by The madoka project.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public
+# License along with this program. If not, see
+# <https://www.gnu.org/licenses/>.
+
 # -*- coding: utf-8 -*-
 """
 Unit tests for the pure-logic core of padoka.
@@ -476,6 +497,76 @@ check("rejects name", _reject("__import__('os')"))
 check("rejects call", _reject("open('x')"))
 check("rejects dunder", _reject("(1).__class__"))
 check("rejects div0", _reject("1/0"))
+
+# ---------------------------------------------------------------------------
+section("PDKClient relay: own PRIVMSG/NOTICE reflected in WebUI")
+# Regression: a message sent from an IRC client through padoka never came
+# back from upstream (servers do not echo your own PRIVMSG/NOTICE), so it
+# was the only one missing from the WebUI buffer/SSE. The relay must push
+# it to the WebUI explicitly (manager.webui_push), like WebUI.send_message
+# does for the opposite direction.
+from padoka.client import PDKClient  # noqa: E402
+
+
+class _RelayManager:
+    def __init__(self, bot_ok=True):
+        self.connected = True
+        self.bot_ok = bot_ok
+        self.to_server = []
+        self.relayed = []
+        self.webui_pushed = []
+
+    def send_to_bot(self, *args):
+        return self.bot_ok
+
+    def send_to_server(self, msg):
+        self.to_server.append(msg)
+
+    def send_to_clients_otherwise(self, msg, elt):
+        self.relayed.append((msg, elt))
+
+    def webui_push(self, msg):
+        self.webui_pushed.append(msg)
+
+
+class _RelaySelf:
+    def __init__(self, manager):
+        self.manager = manager
+        self.padoka_calls = []
+
+    def _padoka_client_command(self, c, a):
+        self.padoka_calls.append((c, a))
+
+
+def _relay(manager, msg, frm=None):
+    self_ = _RelaySelf(manager)
+    PDKClient._send_from_client(self_, msg, frm or self_)  # type: ignore[arg-type]
+    return self_
+
+
+m = _RelayManager()
+_relay(m, _Msg.parse("PRIVMSG #chan :hello world"))
+check("PRIVMSG forwarded upstream", len(m.to_server) == 1)
+check("PRIVMSG relayed to other clients", len(m.relayed) == 1)
+check("PRIVMSG pushed to WebUI", len(m.webui_pushed) == 1
+      and m.webui_pushed[0].params == ["#chan", "hello world"])
+
+m = _RelayManager()
+_relay(m, _Msg.parse("NOTICE #chan :a note"))
+check("NOTICE pushed to WebUI", len(m.webui_pushed) == 1)
+
+# /padoka control commands must never reach upstream or the WebUI
+m = _RelayManager()
+self_ = _relay(m, _Msg.parse("PRIVMSG %s :/padoka status" % "padoka_py"))
+# raw (lowercase) cmd: uppercasing happens inside the real handler
+check("/padoka handled locally", self_.padoka_calls == [("status", [])])
+check("/padoka not forwarded", not m.to_server and not m.webui_pushed)
+
+# a bot veto (send_to_bot False) must suppress the WebUI push as well
+m = _RelayManager(bot_ok=False)
+_relay(m, _Msg.parse("PRIVMSG #chan :vetoed"))
+check("vetoed PRIVMSG not forwarded", not m.to_server)
+check("vetoed PRIVMSG not pushed to WebUI", not m.webui_pushed)
 
 # ---------------------------------------------------------------------------
 print("\n%d passed, %d failed" % (_passed, _failed))

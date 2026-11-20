@@ -18,6 +18,9 @@ COPY src/ ./src/
 COPY plugins/ ./plugins/
 COPY config/ ./config/
 
+# License documents (AGPL-3.0-or-later distribution requirements).
+COPY LICENSE NOTICE README.md ./
+
 # TLS cert for the client port.  A self-signed sample pair is bundled in the
 # repo (config/certs, copied above) and used as-is; it is only regenerated
 # at build time if missing.  Replace with a real CA-issued cert/key before

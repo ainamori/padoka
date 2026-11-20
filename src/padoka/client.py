@@ -1,3 +1,24 @@
+# Copyright (c) 2026 Akira Inamori
+#
+# Padoka is a Python re-implementation of nadoka
+# (https://github.com/nadoka/nadoka), which was itself modeled on
+# madoka (https://www.madoka.org/), the original IRC client-server
+# program by The madoka project.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public
+# License along with this program. If not, see
+# <https://www.gnu.org/licenses/>.
+
 """
 Client-facing connection handler.
 
@@ -450,6 +471,11 @@ class PDKClient:
                                         msg.params[0], text):
                 self.manager.send_to_server(msg)
                 self.manager.send_to_clients_otherwise(msg, from_)
+                # Upstream does not echo our own PRIVMSG/NOTICE back, so
+                # reflect it in the WebUI here; otherwise the user's own
+                # messages were the only ones missing from the WebUI while
+                # everyone else's (relayed from the upstream broadcast) showed.
+                self.manager.webui_push(msg)
         else:
             self.manager.send_to_server(msg)
 

@@ -5,8 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "padoka"
 version = "0.10.3"
-description = "Padoka - IRC client/server proxy"
+description = "Padoka - IRC client/server proxy (a Python re-implementation of nadoka / madoka)"
 readme = "README.md"
+license = { text = "AGPL-3.0-or-later" }
+authors = [
+    { name = "Akira Inamori" },
+]
+keywords = ["irc", "proxy", "bot", "madoka", "nadoka"]
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3",
+]
 requires-python = ">=3.8"
 dependencies = ["PyYAML>=5.4"]
 

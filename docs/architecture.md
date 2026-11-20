@@ -96,9 +96,14 @@ src/padoka/
 
 ### ボットプラグイン（plugins/）
 
-`plugins/` には `PDKBot` を継承した 26 個のボットプラグインがあります。
-ここでは**今回後から移植した 18 個**を、機能と主なイベントフック（どの
-`on_<event>` を使うか）で一覧します。トリガー形式のボットは IRC 上で
+`plugins/` には `PDKBot` を継承した 26 個のボットプラグインがあります
+（madoka / nadoka の同名ボットの機能移植。系譜は [lineage.md](lineage.md) 参照）。
+ここでは**26 個のうちサーバーイベントと密接に関わる 18 個**を、機能と
+主なイベントフック（どの `on_<event>` を使うか）で一覧します。
+残り 8 個（`backlogbot` / `autoawaybot` / `sendpingbot` / `timestampbot` /
+`cronbot` / `titlebot` / `autoop` / `samplebot`）はフックが単純なので、
+各ファイルの docstring を参照してください。
+トリガー形式のボットは IRC 上で
 `<トリガー> <引数>` のプライベート/チャネルメッセージで発動します。
 
 #### PRIVMSG トリガー系

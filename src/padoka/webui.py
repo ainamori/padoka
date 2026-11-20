@@ -1,3 +1,24 @@
+# Copyright (c) 2026 Akira Inamori
+#
+# Padoka is a Python re-implementation of nadoka
+# (https://github.com/nadoka/nadoka), which was itself modeled on
+# madoka (https://www.madoka.org/), the original IRC client-server
+# program by The madoka project.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public
+# License along with this program. If not, see
+# <https://www.gnu.org/licenses/>.
+
 """
 Web UI for Padoka.
 
@@ -618,6 +639,8 @@ border-radius:5px;padding:3px 8px;cursor:pointer;font-size:12px;}
 .line.notice .nick{color:var(--notice);}
 .line .event{color:var(--dim);}
 .line.sys .raw{color:var(--dim);}
+.line a.url{color:var(--accent);text-decoration:underline;}
+.line a.url:hover{color:#fff;}
 .send{display:flex;gap:8px;padding:10px 14px;background:var(--panel);border-top:1px solid var(--line);}
 .send input{flex:1;background:var(--panel2);border:1px solid var(--line);color:var(--fg);
 border-radius:6px;padding:9px 11px;font-size:14px;}
@@ -726,6 +749,45 @@ let memberUpd = false;   // member-list refresh debounce
 const $ = (id) => document.getElementById(id);
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,
   c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+// Escape HTML while turning URLs into <a> links (target=_blank).
+// Operates on the RAW text so every fragment is escaped exactly once.
+// Recognizes "https?://..." and "www...." (scheme added in href only).
+// Trailing sentence punctuation (。) is peeled off the link; a final
+// ")" is kept only while the URL's parentheses stay balanced.
+function linkify(raw){
+  raw = String(raw==null?"":raw);
+  var re = /(?:https?:\/\/|www\.)[^\s<>"']+/gi;
+  var punct = ".,;:!?)]}》。，、．）：！？…";
+  var out = "", last = 0, m;
+  while ((m = re.exec(raw)) !== null) {
+    var core = m[0], trail = "";
+    while (core.length > 1) {
+      var ch = core.charAt(core.length - 1);
+      if (punct.indexOf(ch) === -1) break;
+      if (ch === ")") {
+        var o = (core.match(/\(/g) || []).length;
+        var c = (core.match(/\)/g) || []).length;
+        if (c <= o) break;  // balanced: the paren belongs to the URL
+      }
+      trail = ch + trail;
+      core = core.slice(0, -1);
+    }
+    if (!core.replace(/^(?:https?:\/\/|www\.)/i, "")) {
+      // degenerate match (e.g. a bare "www."): render as plain text
+      out += esc(raw.slice(last, m.index + m[0].length));
+      last = m.index + m[0].length;
+      continue;
+    }
+    var href = /^www\./i.test(core) ? "http://" + core : core;
+    out += esc(raw.slice(last, m.index))
+      + '<a class="url" href="' + esc(href)
+      + '" target="_blank" rel="noopener noreferrer">' + esc(core) + "</a>"
+      + esc(trail);
+    last = m.index + m[0].length;
+  }
+  out += esc(raw.slice(last));
+  return out;
+}
 
 async function api(path, opts){
   opts = opts || {};
@@ -799,10 +861,10 @@ function renderLine(rec){
   if (rec.command === "PRIVMSG" || rec.command === "NOTICE"){
     const nickcls = rec.command === "NOTICE" ? "nick notice" : "nick";
     div.innerHTML = '<span class="time">'+esc(rec.time)+'</span>' +
-      '<span class="'+nickcls+'">'+esc(rec.nick)+'</span> '+esc(rec.text);
+      '<span class="'+nickcls+'">'+esc(rec.nick)+'</span> '+linkify(rec.text);
   } else {
     div.innerHTML = '<span class="time">'+esc(rec.time)+'</span>' +
-      '<span class="event">'+esc(rec.raw)+'</span>';
+      '<span class="event">'+linkify(rec.raw)+'</span>';
   }
   $("messages").appendChild(div);
   scrollBottom();
@@ -920,7 +982,7 @@ $("btnlog").onclick = async ()=>{
     const box = document.createElement("div");
     (data.lines||[]).forEach(l=>{
       const d=document.createElement("div"); d.className="line sys";
-      d.innerHTML='<span class="time">log</span> <span class="raw">'+esc(l)+'</span>';
+      d.innerHTML='<span class="time">log</span> <span class="raw">'+linkify(l)+'</span>';
       box.appendChild(d);
     });
     if ((data.lines||[]).length){ $("messages").prepend(box); }
