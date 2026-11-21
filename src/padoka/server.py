@@ -62,6 +62,13 @@ __all__ = ["PDKServer", "PrefixObject", "sasl_plain_payload"]
 
 TIMER_INTERVAL_SEC = 60
 MAX_PONG_FAIL = 5
+# Bound for the client-facing TLS handshake, which runs in the
+# per-connection handler thread (NOT the accept loop): a peer that
+# completes TCP but never sends a ClientHello (silent scanner probe,
+# stalled mobile reconnect) must not wedge the listener or hold a
+# thread forever (2026-11-21 incident: inline handshake blocked the
+# accept loop and every client reconnect after it failed silently).
+CLIENT_TLS_HANDSHAKE_TIMEOUT = 15.0
 # Max time to wait for the upstream SASL exchange (905 prompt / 904 success).
 # Some servers (e.g. ircnet dev) hold the connection in "processing" (020
 # "Please wait...") for a while; a fully silent server must not hang us
@@ -730,10 +737,15 @@ class PDKServer:
         elif name == "invoke_bot":
             self.send_to_bot(ev[2], *ev[3:])
         elif name == "enter_away":
-            if ev[2] == 0:
+            # Use the LIVE count, not the one captured at enqueue time:
+            # while the upstream is down (reconnect sleep) this queue is
+            # not drained, and a stale enter_away(0) must not fire after
+            # a client has already reconnected (it would AWAY us and part
+            # the login channels again).
+            if self.client_count() == 0:
                 self._enter_away()
         elif name == "leave_away":
-            if ev[2] == 1:
+            if self.client_count() == 1:
                 self._leave_away()
 
     # ------------------------------------------------------------- signals
@@ -784,7 +796,9 @@ class PDKServer:
         except OSError as e:
             self.ndk_error(e)
             return
-        srv.listen(5)
+        # 128: a burst of scanner probes must not overflow the backlog
+        # while handler threads are draining (5 was routinely full).
+        srv.listen(128)
         self._client_srv = srv
         host, p = srv.getsockname()[:2]
         self._logger.slog("Open Client Server Port: %s %s" % (host, p))
@@ -806,28 +820,19 @@ class PDKServer:
                 # the finally below kills every attached client and closes
                 # the listener, so one misbehaving peer would take the whole
                 # client port offline (2026-11-19 incident: a mid-handshake
-                # ConnectionResetError killed this thread).  Handshake
-                # failures are routine here: clients probe the TLS-only
-                # port in plaintext (ssl.SSLError) or abort the TCP
-                # connection mid-handshake (ConnectionResetError -- an
-                # OSError but NOT an ssl.SSLError; LimeChat reconnects do
-                # this).
+                # ConnectionResetError killed this thread).
+                # The TLS handshake itself runs in _handle_client (the
+                # per-connection thread) with a bounded timeout -- doing it
+                # inline here (wrap_socket handshakes eagerly) blocked this
+                # loop on ANY peer that completed TCP but never sent a
+                # ClientHello; the kernel backlog still completed the
+                # TCP handshake for reconnecting clients, but their
+                # ClientHello was never read, so every reconnect after a
+                # single silent peer timed out with no trace in the log
+                # (2026-11-21 incident).  The accept loop must only accept.
                 try:
-                    if ctx:
-                        csock = ctx.wrap_socket(csock, server_side=True)
                     threading.Thread(target=self._handle_client,
-                                     args=(csock, addr), daemon=True).start()
-                except ssl.SSLError as e:
-                    self._logger.slog(
-                        "Client TLS handshake failed from %s: %s (the client "
-                        "port is TLS-only; connect with TLS, e.g. irssi "
-                        "-tls)." % (addr, e))
-                    self._drop_client_socket(csock)
-                except OSError as e:
-                    self._logger.slog(
-                        "Client dropped the connection during the TLS "
-                        "handshake from %s: %s" % (addr, e))
-                    self._drop_client_socket(csock)
+                                     args=(csock, addr, ctx), daemon=True).start()
                 except Exception as e:
                     self.ndk_error(e)
                     self._drop_client_socket(csock)
@@ -847,13 +852,32 @@ class PDKServer:
         except (OSError, AttributeError):
             pass
 
-    def _handle_client(self, sock, addr) -> None:
+    def _handle_client(self, sock, addr,
+                       ctx: Optional[ssl.SSLContext] = None) -> None:
         client = None
         try:
             if self._config.acl_object and \
                     not self._config.acl_object.allow_socket((addr[0], addr[1])):
                 self._logger.slog("ACL denied: %s" % (addr,))
                 return
+            if ctx is not None:
+                # Bounded TLS handshake on THIS thread (never in the accept
+                # loop -- see _clients_thread_proc).  A silent/stalling
+                # peer drops out after the timeout instead of wedging the
+                # listener for every subsequent (re)connect.
+                sock.settimeout(CLIENT_TLS_HANDSHAKE_TIMEOUT)
+                ts: Optional[ssl.SSLSocket] = None
+                try:
+                    ts = ctx.wrap_socket(sock, server_side=True,
+                                         do_handshake_on_connect=False)
+                    ts.settimeout(CLIENT_TLS_HANDSHAKE_TIMEOUT)
+                    ts.do_handshake()
+                except (ssl.SSLError, socket.timeout, OSError) as e:
+                    if ts is not None:
+                        self._drop_client_socket(ts)
+                    self._log_handshake_failure(addr, e)
+                    return
+                sock = ts
             client = PDKClient(self._config, sock, self)
             self._clients.append(client)
             client.start()
@@ -867,6 +891,23 @@ class PDKServer:
                 sock.close()
             except OSError:
                 pass
+
+    def _log_handshake_failure(self, addr, e: Exception) -> None:
+        """Single log record for a client TLS handshake failure."""
+        if isinstance(e, socket.timeout):
+            self._logger.slog(
+                "Client TLS handshake timed out from %s (no ClientHello "
+                "within %ds); dropping."
+                % (addr, CLIENT_TLS_HANDSHAKE_TIMEOUT))
+        elif isinstance(e, ssl.SSLError):
+            self._logger.slog(
+                "Client TLS handshake failed from %s: %s (the client "
+                "port is TLS-only; connect with TLS, e.g. irssi "
+                "-tls)." % (addr, e))
+        else:
+            self._logger.slog(
+                "Client dropped the connection during the TLS "
+                "handshake from %s: %s" % (addr, e))
 
     # ------------------------------------------------------------- ping
     def _timer_loop(self) -> None:
@@ -916,7 +957,15 @@ class PDKServer:
             cmd = Command.part(cs.name)
             cmd.prefix = self.state.nick()
             self._send_to_clients(cmd)
+        # Drop the whole session state: we hold no nick and no channels
+        # upstream any more.  A stale current_nick/current_channels would
+        # let a client reconnecting during the reconnect window pass
+        # _wait_for_ready() and be handed a state dump (NICK/JOIN) for a
+        # session that does not exist, with every message it sends then
+        # silently dropped while the proxy is offline.
         self.state.clear_channels_member()
+        self.state.current_channels.clear()
+        self.state.current_nick = None
 
     def _send_to_clients(self, msg: IRCMessage) -> None:
         if msg.command == "PRIVMSG" and self._config.privmsg_filter_light:

@@ -223,15 +223,21 @@ class PDKClient:
         self._send(self._rpl("376", nick, "End of MOTD command."))
 
     def _wait_for_ready(self, timeout: float) -> bool:
-        """Wait until the proxy has registered its nick upstream.
+        """Wait until the proxy is connected upstream (registered + joined).
 
         Keeps the connection healthy while waiting (pumps the send queue,
-        answers PING, honours QUIT).  Returns True once a nick is available,
-        False on timeout or a closed/dead connection.
+        answers PING, honours QUIT).  Returns True once the proxy is
+        connected, False on timeout or a closed/dead connection.
+
+        Gating on ``connected`` (not just a nick) matters for reconnection:
+        the nick is reset when the upstream drops, so a client reconnecting
+        mid-reconnect-window waits for the NEW session instead of being
+        handed a state dump (NICK/JOIN) for a dead one, after which every
+        message it sends is silently dropped while the proxy is offline.
         """
         deadline = time.time() + timeout
         while not self._stop:
-            if self.manager.state.nick():
+            if self.manager.connected:
                 return True
             if time.time() >= deadline:
                 return False

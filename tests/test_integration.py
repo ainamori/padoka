@@ -360,6 +360,46 @@ channel_info:
         print("[ok] client port survives a mid-handshake TCP RST")
         probe.close()
 
+        # regression (2026-11-21): a peer that completes TCP but never
+        # sends a ClientHello (silent scanner probe / stalled mobile
+        # reconnect) used to block the accept loop inside the inline
+        # wrap_socket() handshake; the kernel backlog still completed the
+        # TCP handshake for subsequent clients, but their ClientHello was
+        # never read, so every client reconnect after a single silent
+        # peer timed out with no trace in the padoka log.  The handshake
+        # now runs in the per-connection handler thread with a bound, so a
+        # second client must log in while the silent peer still sits there.
+        silent = socket.create_connection(("127.0.0.1", client_port),
+                                          timeout=5)
+        time.sleep(0.3)  # let the handler thread pick it up and stall
+        ws = socket.create_connection(("127.0.0.1", client_port), timeout=5)
+        wc = ssl.create_default_context()
+        wc.check_hostname = False
+        wc.verify_mode = ssl.CERT_NONE
+        wt = wc.wrap_socket(ws, server_hostname="localhost",
+                            do_handshake_on_connect=False)
+        wt.settimeout(10)
+        wt.do_handshake()  # must not block behind the silent peer
+        wt.settimeout(5)
+        wt.sendall(b"PASS testpass\r\nNICK wedgeprobe\r\n"
+                   b"USER wedgeprobe 0 0 :wedgeprobe\r\n")
+        blob = b""
+        wdeadline = time.time() + 10
+        while b" 001 " not in blob and time.time() < wdeadline:
+            try:
+                chunk = wt.recv(4096)
+            except socket.timeout:
+                continue
+            if not chunk:
+                break
+            blob += chunk
+        wt.close()
+        silent.close()
+        assert b" 001 " in blob, (
+            "client login blocked behind a silent (no-ClientHello) peer "
+            "-- accept-loop handshake wedge: %r" % blob)
+        print("[ok] client port not wedged by a silent (stalled TLS) peer")
+
         # regression (2026-11-19 scanner probes): raw non-IRC traffic on the
         # TLS client port must not crash the handler thread.  Two shapes
         # seen in the wild:
@@ -519,6 +559,18 @@ channel_info:
                 tls_srv.sock.close()
             except OSError:
                 pass
+
+        # the upstream-disconnect path must reset the session state (nick
+        # + channels): a stale current_nick/current_channels would let a
+        # client reconnecting during the reconnect window log in against
+        # a dead session (_wait_for_ready passed on the stale nick and
+        # every message sent afterwards was silently dropped)
+        ndk._part_from_all_channels()
+        assert ndk.state.nick() is None, \
+            "stale nick survived upstream disconnect (state not reset)"
+        assert ndk.state.current_channels == {}, \
+            "stale channels survived upstream disconnect (state not reset)"
+        print("[ok] upstream disconnect resets nick/channel state")
 
         cl.close()
         cl2.close()
